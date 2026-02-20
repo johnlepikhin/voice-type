@@ -2,22 +2,17 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk4::prelude::*;
-use gtk4::{
-    Box as GtkBox, Button, DrawingArea, Label, Orientation, ScrolledWindow, Spinner, TextView,
-    Window, WrapMode,
-};
+use gtk4::{Box as GtkBox, Button, DrawingArea, Label, Orientation, Spinner, Window};
 
-type ConfirmCallback = dyn Fn(String);
 type CancelCallback = dyn Fn();
 
-/// Build the compact overlay window for daemon mode transcription confirmation.
+/// Build the compact overlay window for daemon mode status display.
 ///
-/// Layout: status label, spinner/result area, editable text, confirm/cancel buttons.
-/// Keyboard: Enter to confirm, Escape to cancel.
+/// Layout: status label, spinner, error area, cancel button.
+/// Keyboard: Escape to cancel.
 ///
-/// Callbacks are set after construction via [`OverlayWindow::set_on_confirm`] and
-/// [`OverlayWindow::set_on_cancel`], allowing the caller to pass an `Rc<OverlayWindow>`
-/// into the closures.
+/// Cancel callback is set after construction via [`OverlayWindow::set_on_cancel`],
+/// allowing the caller to pass an `Rc<OverlayWindow>` into the closure.
 pub fn build_overlay() -> OverlayWindow {
     let window = Window::builder()
         .title("Voice Type")
@@ -47,58 +42,26 @@ pub fn build_overlay() -> OverlayWindow {
     let spinner = Spinner::new();
     spinner.set_visible(false);
 
-    let text_view = TextView::new();
-    text_view.set_wrap_mode(WrapMode::WordChar);
-    text_view.set_editable(true);
-    text_view.add_css_class("transcription-text");
-    text_view.set_visible(false);
-
-    let scrolled = ScrolledWindow::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .child(&text_view)
-        .build();
-
     let error_label = Label::new(None);
     error_label.add_css_class("error-message");
     error_label.set_wrap(true);
     error_label.set_visible(false);
 
-    let button_box = GtkBox::new(Orientation::Horizontal, 8);
-    button_box.set_halign(gtk4::Align::End);
-
-    let confirm_btn = Button::with_label("Confirm");
-    confirm_btn.add_css_class("confirm-button");
-    confirm_btn.set_visible(false);
-
     let cancel_btn = Button::with_label("Cancel");
     cancel_btn.add_css_class("cancel-button");
-
-    button_box.append(&cancel_btn);
-    button_box.append(&confirm_btn);
 
     main_box.append(&status_label);
     main_box.append(&timer_label);
     main_box.append(&level_area);
     main_box.append(&spinner);
-    main_box.append(&scrolled);
     main_box.append(&error_label);
-    main_box.append(&button_box);
+    main_box.append(&cancel_btn);
 
     window.set_child(Some(&main_box));
 
-    let text_buf = text_view.buffer();
-    let on_confirm: Rc<RefCell<Option<Box<ConfirmCallback>>>> = Rc::new(RefCell::new(None));
     let on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>> = Rc::new(RefCell::new(None));
 
-    wire_callbacks(
-        &confirm_btn,
-        &cancel_btn,
-        &window,
-        &text_buf,
-        &on_confirm,
-        &on_cancel,
-    );
+    wire_callbacks(&cancel_btn, &window, &on_cancel);
 
     OverlayWindow {
         window,
@@ -107,36 +70,18 @@ pub fn build_overlay() -> OverlayWindow {
         level_area,
         level_value,
         spinner,
-        text_view,
-        scrolled,
         error_label,
-        confirm_btn,
         _cancel_btn: cancel_btn,
-        text_buf,
-        on_confirm,
         on_cancel,
     }
 }
 
-/// Connect confirm/cancel button clicks and the Escape key to callback slots.
+/// Connect cancel button click and the Escape key to the cancel callback slot.
 fn wire_callbacks(
-    confirm_btn: &Button,
     cancel_btn: &Button,
     window: &Window,
-    text_buf: &gtk4::TextBuffer,
-    on_confirm: &Rc<RefCell<Option<Box<ConfirmCallback>>>>,
     on_cancel: &Rc<RefCell<Option<Box<CancelCallback>>>>,
 ) {
-    let buf = text_buf.clone();
-    let cb = Rc::clone(on_confirm);
-    confirm_btn.connect_clicked(move |_| {
-        if let Some(ref f) = *cb.borrow() {
-            let (start, end) = buf.bounds();
-            let text = buf.text(&start, &end, false);
-            f(text.to_string());
-        }
-    });
-
     let cb = Rc::clone(on_cancel);
     cancel_btn.connect_clicked(move |_| {
         if let Some(ref f) = *cb.borrow() {
@@ -167,22 +112,12 @@ pub struct OverlayWindow {
     level_area: DrawingArea,
     level_value: Rc<Cell<f32>>,
     spinner: Spinner,
-    text_view: TextView,
-    scrolled: ScrolledWindow,
     error_label: Label,
-    confirm_btn: Button,
     _cancel_btn: Button,
-    text_buf: gtk4::TextBuffer,
-    on_confirm: Rc<RefCell<Option<Box<ConfirmCallback>>>>,
     on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>>,
 }
 
 impl OverlayWindow {
-    /// Set the callback invoked when the user confirms the transcription.
-    pub fn set_on_confirm(&self, f: impl Fn(String) + 'static) {
-        *self.on_confirm.borrow_mut() = Some(Box::new(f));
-    }
-
     /// Set the callback invoked when the user cancels (button or Escape).
     pub fn set_on_cancel(&self, f: impl Fn() + 'static) {
         *self.on_cancel.borrow_mut() = Some(Box::new(f));
@@ -204,10 +139,7 @@ impl OverlayWindow {
         self.level_area.queue_draw();
         self.spinner.set_visible(false);
         self.spinner.set_spinning(false);
-        self.scrolled.set_visible(false);
-        self.text_view.set_visible(false);
         self.error_label.set_visible(false);
-        self.confirm_btn.set_visible(false);
         self.window.present();
     }
 
@@ -220,18 +152,6 @@ impl OverlayWindow {
         self.spinner.set_visible(true);
     }
 
-    /// Show the transcription result for confirmation.
-    pub fn show_result(&self, text: &str) {
-        self.status_label.set_text("Review and confirm:");
-        self.spinner.set_spinning(false);
-        self.spinner.set_visible(false);
-        self.text_buf.set_text(text);
-        self.text_view.set_visible(true);
-        self.scrolled.set_visible(true);
-        self.confirm_btn.set_visible(true);
-        self.text_view.grab_focus();
-    }
-
     /// Show post-processing progress (e.g., "Step 1/3: Grammar...").
     pub fn show_processing(&self, step: usize, total: usize, name: &str) {
         self.status_label
@@ -240,10 +160,7 @@ impl OverlayWindow {
         self.level_area.set_visible(false);
         self.spinner.set_spinning(true);
         self.spinner.set_visible(true);
-        self.scrolled.set_visible(false);
-        self.text_view.set_visible(false);
         self.error_label.set_visible(false);
-        self.confirm_btn.set_visible(false);
     }
 
     /// Show an error.

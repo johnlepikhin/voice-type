@@ -33,7 +33,6 @@ enum DaemonPhase {
     Recording,
     Transcribing,
     PostProcessing,
-    AwaitingConfirmation,
 }
 
 /// Shared daemon state.
@@ -49,8 +48,8 @@ struct DaemonState {
 /// 1. Starts a global hotkey listener in a background thread
 /// 2. Polls for hotkey events on the glib main loop
 /// 3. Toggles recording on hotkey press
-/// 4. Shows an overlay for transcription confirmation
-/// 5. Inserts confirmed text into the previously focused window
+/// 4. Transcribes and post-processes the audio
+/// 5. Auto-inserts text into the previously focused window
 pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
     let capture_config = CaptureConfig {
         device_name: config.audio.device.clone(),
@@ -68,22 +67,7 @@ pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
         timer_source: None,
     }));
 
-    // Build overlay with confirm/cancel callbacks.
-    // We create the overlay first, then wire up callbacks that reference it.
     let overlay = Rc::new(overlay::build_overlay());
-
-    {
-        let state_for_confirm = Rc::clone(&state);
-        let overlay_for_confirm = Rc::clone(&overlay);
-        overlay.set_on_confirm(move |text| {
-            tracing::info!("Confirming text insertion: {} chars", text.len());
-            if let Err(e) = insertion::insert_text(&text) {
-                tracing::error!("Text insertion failed: {e}");
-            }
-            state_for_confirm.borrow_mut().phase = DaemonPhase::Idle;
-            overlay_for_confirm.hide();
-        });
-    }
 
     {
         let state_for_cancel = Rc::clone(&state);
@@ -135,10 +119,8 @@ pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
                         &overlay_ref,
                     );
                 }
-                DaemonPhase::Transcribing
-                | DaemonPhase::PostProcessing
-                | DaemonPhase::AwaitingConfirmation => {
-                    // Ignore hotkey during transcription/post-processing/confirmation
+                DaemonPhase::Transcribing | DaemonPhase::PostProcessing => {
+                    // Ignore hotkey during transcription/post-processing
                 }
             }
         }
@@ -292,9 +274,8 @@ fn poll_pipeline_progress(
             glib::ControlFlow::Continue
         }
         Ok(PipelineProgress::Done { ref text }) => {
-            tracing::info!("Pipeline complete: {} chars", text.len());
-            state.borrow_mut().phase = DaemonPhase::AwaitingConfirmation;
-            overlay.show_result(text);
+            tracing::info!("Pipeline complete: {} chars, inserting", text.len());
+            insert_and_finish(&state, &overlay, text);
             glib::ControlFlow::Break
         }
         Ok(PipelineProgress::Failed {
@@ -319,6 +300,19 @@ fn poll_pipeline_progress(
     });
 }
 
+/// Insert text into the focused window and reset daemon to idle.
+fn insert_and_finish(
+    state: &Rc<RefCell<DaemonState>>,
+    overlay: &Rc<overlay::OverlayWindow>,
+    text: &str,
+) {
+    if let Err(e) = insertion::insert_text(text) {
+        tracing::error!("Text insertion failed: {e}");
+    }
+    state.borrow_mut().phase = DaemonPhase::Idle;
+    overlay.hide();
+}
+
 /// Handle a pipeline failure by showing the error and falling back to original text.
 fn handle_pipeline_failure(
     state: &Rc<RefCell<DaemonState>>,
@@ -337,17 +331,9 @@ fn handle_pipeline_failure(
             move || o.hide()
         });
     } else {
-        // Post-processing failed — show original text for confirmation
+        // Post-processing failed — insert original text directly
         tracing::error!("Post-processing failed at '{processor_name}': {error}");
-        overlay.show_error(&format!(
-            "Post-processing failed at '{processor_name}': {error}"
-        ));
-        state.borrow_mut().phase = DaemonPhase::AwaitingConfirmation;
-        // Show error briefly, then switch to editable original text
-        let text = original_text.to_owned();
-        glib::timeout_add_local_once(Duration::from_secs(2), {
-            let o = Rc::clone(overlay);
-            move || o.show_result(&text)
-        });
+        tracing::info!("Falling back to original text: {} chars", original_text.len());
+        insert_and_finish(state, overlay, original_text);
     }
 }
