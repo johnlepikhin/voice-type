@@ -107,25 +107,29 @@ fn cmd_daemon(cli: &cli::Cli) -> Result<()> {
         .flags(gio::ApplicationFlags::IS_SERVICE)
         .build();
 
-    let config_for_activate = config;
+    let config_for_startup = config;
     let initialized = std::cell::Cell::new(false);
-    application.connect_activate(move |app_ref| {
+
+    // Use `startup` for initialization — IS_SERVICE apps don't auto-activate.
+    application.connect_startup(move |app_ref| {
         if initialized.get() {
-            // Re-activation from `voice-type stop` — shut down gracefully.
-            tracing::info!("Received stop signal, shutting down...");
-            app_ref.quit();
             return;
         }
         initialized.set(true);
 
         app::load_css();
-        app::run_daemon(app_ref, &config_for_activate);
+        app::run_daemon(app_ref, &config_for_startup);
     });
 
-    // Hold the application so it stays alive
+    // Re-activation from `voice-type stop` → shut down gracefully.
+    application.connect_activate(|app_ref| {
+        tracing::info!("Received stop signal, shutting down...");
+        app_ref.quit();
+    });
+
+    // Hold the application so it stays alive.
     let _hold_guard = application.hold();
 
-    // Activate to trigger setup
     application.run_with_args::<String>(&[]);
     Ok(())
 }
