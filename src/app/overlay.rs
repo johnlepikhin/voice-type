@@ -1,16 +1,24 @@
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, Label, Orientation, ScrolledWindow, Spinner, TextView, Window, WrapMode,
+    Box as GtkBox, Button, DrawingArea, Label, Orientation, ScrolledWindow, Spinner, TextView,
+    Window, WrapMode,
 };
+
+type ConfirmCallback = dyn Fn(String);
+type CancelCallback = dyn Fn();
 
 /// Build the compact overlay window for daemon mode transcription confirmation.
 ///
 /// Layout: status label, spinner/result area, editable text, confirm/cancel buttons.
 /// Keyboard: Enter to confirm, Escape to cancel.
-pub fn build_overlay(
-    on_confirm: impl Fn(String) + 'static,
-    on_cancel: impl Fn() + 'static,
-) -> OverlayWindow {
+///
+/// Callbacks are set after construction via [`OverlayWindow::set_on_confirm`] and
+/// [`OverlayWindow::set_on_cancel`], allowing the caller to pass an `Rc<OverlayWindow>`
+/// into the closures.
+pub fn build_overlay() -> OverlayWindow {
     let window = Window::builder()
         .title("Voice Type")
         .default_width(400)
@@ -32,6 +40,9 @@ pub fn build_overlay(
 
     let timer_label = Label::new(Some("00:00"));
     timer_label.add_css_class("elapsed-time");
+
+    let level_value: Rc<Cell<f32>> = Rc::new(Cell::new(0.0));
+    let level_area = build_level_meter(&level_value);
 
     let spinner = Spinner::new();
     spinner.set_visible(false);
@@ -68,6 +79,7 @@ pub fn build_overlay(
 
     main_box.append(&status_label);
     main_box.append(&timer_label);
+    main_box.append(&level_area);
     main_box.append(&spinner);
     main_box.append(&scrolled);
     main_box.append(&error_label);
@@ -75,41 +87,18 @@ pub fn build_overlay(
 
     window.set_child(Some(&main_box));
 
-    // Confirm button
     let text_buf = text_view.buffer();
-    {
-        let buf = text_buf.clone();
-        confirm_btn.connect_clicked(move |_| {
-            let (start, end) = buf.bounds();
-            let text = buf.text(&start, &end, false);
-            on_confirm(text.to_string());
-        });
-    }
+    let on_confirm: Rc<RefCell<Option<Box<ConfirmCallback>>>> = Rc::new(RefCell::new(None));
+    let on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>> = Rc::new(RefCell::new(None));
 
-    // Cancel button
-    {
-        let on_cancel_ref = std::rc::Rc::new(on_cancel);
-        let oc = on_cancel_ref.clone();
-        cancel_btn.connect_clicked(move |_| oc());
-
-        // Escape key to cancel
-        let key_controller = gtk4::EventControllerKey::new();
-        let oc2 = on_cancel_ref;
-        key_controller.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk4::gdk::Key::Escape {
-                oc2();
-                gtk4::glib::Propagation::Stop
-            } else {
-                gtk4::glib::Propagation::Proceed
-            }
-        });
-        window.add_controller(key_controller);
-    }
+    wire_callbacks(&confirm_btn, &cancel_btn, &window, &text_buf, &on_confirm, &on_cancel);
 
     OverlayWindow {
         window,
         status_label,
         timer_label,
+        level_area,
+        level_value,
         spinner,
         text_view,
         scrolled,
@@ -117,29 +106,95 @@ pub fn build_overlay(
         confirm_btn,
         _cancel_btn: cancel_btn,
         text_buf,
+        on_confirm,
+        on_cancel,
     }
+}
+
+/// Connect confirm/cancel button clicks and the Escape key to callback slots.
+fn wire_callbacks(
+    confirm_btn: &Button,
+    cancel_btn: &Button,
+    window: &Window,
+    text_buf: &gtk4::TextBuffer,
+    on_confirm: &Rc<RefCell<Option<Box<ConfirmCallback>>>>,
+    on_cancel: &Rc<RefCell<Option<Box<CancelCallback>>>>,
+) {
+    let buf = text_buf.clone();
+    let cb = Rc::clone(on_confirm);
+    confirm_btn.connect_clicked(move |_| {
+        if let Some(ref f) = *cb.borrow() {
+            let (start, end) = buf.bounds();
+            let text = buf.text(&start, &end, false);
+            f(text.to_string());
+        }
+    });
+
+    let cb = Rc::clone(on_cancel);
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(ref f) = *cb.borrow() {
+            f();
+        }
+    });
+
+    let key_controller = gtk4::EventControllerKey::new();
+    let cb = Rc::clone(on_cancel);
+    key_controller.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk4::gdk::Key::Escape {
+            if let Some(ref f) = *cb.borrow() {
+                f();
+            }
+            gtk4::glib::Propagation::Stop
+        } else {
+            gtk4::glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(key_controller);
 }
 
 /// Wrapper for the overlay window with access to its widgets.
 pub struct OverlayWindow {
-    pub window: Window,
-    pub status_label: Label,
-    pub timer_label: Label,
-    pub spinner: Spinner,
-    pub text_view: TextView,
-    pub scrolled: ScrolledWindow,
-    pub error_label: Label,
-    pub confirm_btn: Button,
-    pub _cancel_btn: Button,
-    pub text_buf: gtk4::TextBuffer,
+    window: Window,
+    status_label: Label,
+    timer_label: Label,
+    level_area: DrawingArea,
+    level_value: Rc<Cell<f32>>,
+    spinner: Spinner,
+    text_view: TextView,
+    scrolled: ScrolledWindow,
+    error_label: Label,
+    confirm_btn: Button,
+    _cancel_btn: Button,
+    text_buf: gtk4::TextBuffer,
+    on_confirm: Rc<RefCell<Option<Box<ConfirmCallback>>>>,
+    on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>>,
 }
 
 impl OverlayWindow {
+    /// Set the callback invoked when the user confirms the transcription.
+    pub fn set_on_confirm(&self, f: impl Fn(String) + 'static) {
+        *self.on_confirm.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Set the callback invoked when the user cancels (button or Escape).
+    pub fn set_on_cancel(&self, f: impl Fn() + 'static) {
+        *self.on_cancel.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Update the VU meter level.
+    pub fn update_level(&self, level: f32) {
+        self.level_value.set(level);
+        self.level_area.queue_draw();
+    }
+
     /// Show the overlay in recording state.
     pub fn show_recording(&self) {
         self.status_label.set_text("Recording...");
         self.timer_label.set_text("00:00");
         self.timer_label.set_visible(true);
+        self.level_value.set(0.0);
+        self.level_area.set_visible(true);
+        self.level_area.queue_draw();
         self.spinner.set_visible(false);
         self.spinner.set_spinning(false);
         self.scrolled.set_visible(false);
@@ -153,6 +208,7 @@ impl OverlayWindow {
     pub fn show_transcribing(&self) {
         self.status_label.set_text("Transcribing...");
         self.timer_label.set_visible(false);
+        self.level_area.set_visible(false);
         self.spinner.set_spinning(true);
         self.spinner.set_visible(true);
     }
@@ -174,6 +230,7 @@ impl OverlayWindow {
         self.status_label.set_text("Error");
         self.spinner.set_spinning(false);
         self.spinner.set_visible(false);
+        self.level_area.set_visible(false);
         self.error_label.set_text(message);
         self.error_label.set_visible(true);
     }
@@ -188,5 +245,69 @@ impl OverlayWindow {
     /// Hide the overlay.
     pub fn hide(&self) {
         self.window.set_visible(false);
+    }
+}
+
+/// Number of discrete bars in the VU meter.
+const BAR_COUNT: u32 = 16;
+
+/// Gap in pixels between bars.
+const BAR_GAP: f64 = 2.0;
+
+/// Build a `DrawingArea`-based VU meter that reads its level from `level_value`.
+fn build_level_meter(level_value: &Rc<Cell<f32>>) -> DrawingArea {
+    let area = DrawingArea::new();
+    area.set_content_width(200);
+    area.set_content_height(16);
+    area.add_css_class("level-meter");
+
+    let lv = Rc::clone(level_value);
+    area.set_draw_func(move |_area, cr, width, height| {
+        draw_level_bars(cr, width, height, lv.get());
+    });
+
+    area
+}
+
+/// Render discrete colored bars into the cairo context.
+fn draw_level_bars(cr: &gtk4::cairo::Context, width: i32, height: i32, level: f32) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    let total_width = f64::from(width);
+    let total_height = f64::from(height);
+    let count = f64::from(BAR_COUNT);
+    let total_gaps = (count - 1.0) * BAR_GAP;
+    let bar_width = (total_width - total_gaps) / count;
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let filled = (f64::from(level) * count).round() as u32;
+
+    for idx in 0..BAR_COUNT {
+        let bar_x = f64::from(idx) * (bar_width + BAR_GAP);
+
+        // Color by position: green → yellow → red
+        let color = if idx < 10 {
+            (0.18, 0.8, 0.34) // green
+        } else if idx < 13 {
+            (0.95, 0.77, 0.06) // yellow
+        } else {
+            (0.91, 0.30, 0.24) // red
+        };
+
+        if idx < filled {
+            cr.set_source_rgb(color.0, color.1, color.2);
+        } else {
+            cr.set_source_rgba(color.0, color.1, color.2, 0.15);
+        }
+
+        // Rounded rectangle via arcs (2px radius)
+        let radius = 2.0_f64.min(bar_width / 2.0);
+        cr.new_path();
+        cr.arc(bar_x + bar_width - radius, radius, radius, -FRAC_PI_2, 0.0);
+        cr.arc(bar_x + bar_width - radius, total_height - radius, radius, 0.0, FRAC_PI_2);
+        cr.arc(bar_x + radius, total_height - radius, radius, FRAC_PI_2, PI);
+        cr.arc(bar_x + radius, radius, radius, PI, 3.0 * FRAC_PI_2);
+        cr.close_path();
+        let _ = cr.fill();
     }
 }

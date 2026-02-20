@@ -28,6 +28,12 @@
     background-color: @accent_bg_color;
 }
 
+/* VU meter (DrawingArea bars) */
+.level-meter {
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
 /* Transcription text area */
 .transcription-text {
     font-size: 16px;

@@ -65,25 +65,38 @@ pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
         timer_source: None,
     }));
 
-    // Build overlay with confirm/cancel callbacks
-    let state_for_confirm = Rc::clone(&state);
-    let state_for_cancel = Rc::clone(&state);
+    // Build overlay with confirm/cancel callbacks.
+    // We create the overlay first, then wire up callbacks that reference it.
+    let overlay = Rc::new(overlay::build_overlay());
 
-    let overlay = Rc::new(overlay::build_overlay(
-        move |text| {
-            // Confirm: insert text and return to idle
+    {
+        let state_for_confirm = Rc::clone(&state);
+        let overlay_for_confirm = Rc::clone(&overlay);
+        overlay.set_on_confirm(move |text| {
             tracing::info!("Confirming text insertion: {} chars", text.len());
             if let Err(e) = insertion::insert_text(&text) {
                 tracing::error!("Text insertion failed: {e}");
             }
             state_for_confirm.borrow_mut().phase = DaemonPhase::Idle;
-        },
-        move || {
-            // Cancel: return to idle
+            overlay_for_confirm.hide();
+        });
+    }
+
+    {
+        let state_for_cancel = Rc::clone(&state);
+        let overlay_for_cancel = Rc::clone(&overlay);
+        overlay.set_on_cancel(move || {
             tracing::info!("Transcription cancelled");
-            state_for_cancel.borrow_mut().phase = DaemonPhase::Idle;
-        },
-    ));
+            let mut s = state_for_cancel.borrow_mut();
+            if let Some(source) = s.timer_source.take() {
+                source.remove();
+            }
+            s.capture.take(); // drop stops recording
+            s.phase = DaemonPhase::Idle;
+            drop(s); // release borrow before calling overlay
+            overlay_for_cancel.hide();
+        });
+    }
 
     // Start hotkey listener
     let hotkey_listener = match HotkeyListener::start(&config.hotkey.binding) {
@@ -159,6 +172,7 @@ fn start_daemon_recording(
                         return glib::ControlFlow::Break;
                     }
                     overlay_ref.update_timer(cap.elapsed());
+                    overlay_ref.update_level(cap.current_rms().value());
                     glib::ControlFlow::Continue
                 } else {
                     glib::ControlFlow::Break
