@@ -34,12 +34,25 @@ struct WhisperResponse {
     text: String,
 }
 
+/// Error response from the `OpenAI` API.
+#[derive(Deserialize)]
+struct OpenAiErrorResponse {
+    error: OpenAiErrorDetail,
+}
+
+/// Inner error detail from the `OpenAI` API.
+#[derive(Deserialize)]
+struct OpenAiErrorDetail {
+    message: String,
+}
+
 impl OpenAiWhisperProvider {
     /// Create a new provider from configuration values.
     #[must_use]
     pub fn new(api_key: Secret, model: String, timeout: Duration) -> Self {
         let config = Agent::config_builder()
             .timeout_global(Some(timeout))
+            .http_status_as_error(false)
             .build();
         let agent = Agent::new_with_config(config);
 
@@ -138,45 +151,49 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
 
         let request_duration = start.elapsed();
 
-        match result {
-            Ok(mut response) => {
-                let body_str = response
-                    .body_mut()
-                    .read_to_string()
-                    .map_err(|e| TranscriptionError::NetworkError(e.to_string()))?;
+        let mut response = match result {
+            Ok(resp) => resp,
+            Err(e) => return Err(map_ureq_error(e)),
+        };
 
-                let whisper_response: WhisperResponse =
-                    serde_json::from_str(&body_str).map_err(|e| {
-                        TranscriptionError::ProviderError {
-                            status: response.status().as_u16(),
-                            message: format!("Failed to parse response: {e}"),
-                        }
-                    })?;
+        let status = response.status().as_u16();
 
-                if whisper_response.text.trim().is_empty() {
-                    return Err(TranscriptionError::EmptyAudio);
-                }
+        let body_str = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| TranscriptionError::NetworkError(e.to_string()))?;
 
-                Ok(TranscriptionResult {
-                    text: TranscribedText::new(whisper_response.text),
-                    request_duration,
-                })
-            }
-            Err(e) => Err(map_ureq_error(e)),
+        if status == 401 {
+            return Err(TranscriptionError::AuthenticationError);
         }
+
+        if !(200..300).contains(&status) {
+            let message = serde_json::from_str::<OpenAiErrorResponse>(&body_str)
+                .map(|r| r.error.message)
+                .unwrap_or(body_str);
+            return Err(TranscriptionError::ProviderError { status, message });
+        }
+
+        let whisper_response: WhisperResponse =
+            serde_json::from_str(&body_str).map_err(|e| TranscriptionError::ProviderError {
+                status,
+                message: format!("Failed to parse response: {e}"),
+            })?;
+
+        if whisper_response.text.trim().is_empty() {
+            return Err(TranscriptionError::EmptyAudio);
+        }
+
+        Ok(TranscriptionResult {
+            text: TranscribedText::new(whisper_response.text),
+            request_duration,
+        })
     }
 }
 
-/// Map ureq errors to our transcription error types.
+/// Map ureq transport-level errors to our transcription error types.
 fn map_ureq_error(error: ureq::Error) -> TranscriptionError {
     match error {
-        ureq::Error::StatusCode(status) => match status {
-            401 => TranscriptionError::AuthenticationError,
-            _ => TranscriptionError::ProviderError {
-                status,
-                message: format!("HTTP {status}"),
-            },
-        },
         ureq::Error::Timeout(_) => TranscriptionError::Timeout,
         other => TranscriptionError::NetworkError(other.to_string()),
     }
