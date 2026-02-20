@@ -142,6 +142,36 @@ fn format_validation_errors(errors: &[ValidationError]) -> String {
     s
 }
 
+/// Errors during text post-processing pipeline execution.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PostProcessingError {
+    /// Network connectivity issue.
+    #[error("Post-processing network error: {0}")]
+    NetworkError(String),
+
+    /// Invalid or missing API key.
+    #[error("Post-processing authentication failed. Check the API key for this processor")]
+    AuthenticationError,
+
+    /// Provider returned an error response.
+    #[error("Post-processing provider error (HTTP {status}): {message}")]
+    ProviderError {
+        /// HTTP status code.
+        status: u16,
+        /// Error message from provider.
+        message: String,
+    },
+
+    /// Request timed out.
+    #[error("Post-processing request timed out")]
+    Timeout,
+
+    /// Provider returned an empty response.
+    #[error("Post-processing returned an empty response")]
+    EmptyResponse,
+}
+
 /// A single validation error with suggestion.
 #[derive(Debug, Clone)]
 pub struct ValidationError {
@@ -193,6 +223,22 @@ mod tests {
         let s = err.to_string();
         assert!(s.contains("provider.api_key"));
         assert!(s.contains("Suggestion"));
+    }
+
+    #[test]
+    fn post_processing_error_display() {
+        let err = PostProcessingError::ProviderError {
+            status: 429,
+            message: "Rate limit exceeded".to_owned(),
+        };
+        assert!(err.to_string().contains("429"));
+        assert!(err.to_string().contains("Rate limit"));
+
+        let err = PostProcessingError::EmptyResponse;
+        assert!(err.to_string().contains("empty response"));
+
+        let err = PostProcessingError::AuthenticationError;
+        assert!(err.to_string().contains("authentication"));
     }
 
     #[test]

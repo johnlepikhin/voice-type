@@ -76,6 +76,14 @@ pub enum Secret {
 }
 
 impl Secret {
+    /// Create a `Secret::String` from a plain string.
+    ///
+    /// Intended for tests and configuration defaults.
+    #[must_use]
+    pub fn from_string(value: &str) -> Self {
+        Self::String(SecUtf8String::from(value))
+    }
+
     /// Resolve the secret to a plaintext string.
     ///
     /// # Errors

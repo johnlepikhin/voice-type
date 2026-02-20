@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use structdoc::StructDoc;
 
 use crate::error::{ConfigError, ValidationError};
+use crate::postprocess::config::PostProcessorConfig;
 use crate::types::{HotkeyBinding, LanguageCode, RmsLevel, SampleRate};
 
 pub use secret::Secret;
@@ -28,6 +29,10 @@ pub struct AppConfig {
     /// UI preferences.
     #[serde(default)]
     pub ui: UiConfig,
+
+    /// Post-processing pipeline (zero or more processors).
+    #[serde(default)]
+    pub post_processing: Vec<PostProcessorConfig>,
 }
 
 /// Provider configuration (externally tagged enum).
@@ -295,6 +300,11 @@ impl AppConfig {
             });
         }
 
+        // Validate post-processing
+        for (i, processor) in self.post_processing.iter().enumerate() {
+            processor.validate_into(i, &mut errors);
+        }
+
         // Validate hotkey
         if let Err(e) = crate::hotkey::validate_binding(self.hotkey.binding.as_str()) {
             errors.push(ValidationError {
@@ -350,6 +360,16 @@ hotkey:
 
 ui:
   overlay_position: TopCenter
+
+# post_processing:             # Optional: LLM post-processing pipeline
+#   - name: Grammar
+#     system_prompt: "Fix grammar and punctuation. Return only the corrected text."
+#     api_key: !FromEnv OPENAI_API_KEY
+#     model: gpt-4o-mini
+#     # endpoint: https://api.openai.com
+#     # timeout: 15s
+#     # temperature: 0.3
+#     # max_tokens: 2048
 "#
         .to_owned()
     }

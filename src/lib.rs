@@ -6,5 +6,6 @@ pub mod config;
 pub mod error;
 pub mod hotkey;
 pub mod insertion;
+pub mod postprocess;
 pub mod provider;
 pub mod types;
