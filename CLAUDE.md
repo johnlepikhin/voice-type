@@ -59,6 +59,7 @@ guix shell -m manifest.scm -- cargo doc --no-deps      # Docs build clean
 
 ## Recent Changes
 
+- 002-text-post-processing: Text post-processing pipeline with configurable LLM processors
 - 001-core-voice-input: Added Rust 1.88+ (stable, edition 2021)
 
 <!-- MANUAL ADDITIONS START -->

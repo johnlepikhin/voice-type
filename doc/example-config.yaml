@@ -52,3 +52,23 @@ ui:
   # Overlay window position on screen.
   # Options: TopCenter, TopRight, BottomCenter, BottomRight, Center
   overlay_position: TopCenter       # default: TopCenter
+
+# ─── Post-Processing ────────────────────────────────────────────────────────
+# Optional pipeline of LLM-based text processors. Each processor receives the
+# output of the previous one (or the raw transcription for the first step).
+# If a processor fails, the original transcription is shown for confirmation.
+#
+# post_processing:
+#   - name: Grammar
+#     system_prompt: "Fix grammar and punctuation. Return only the corrected text."
+#     api_key: !FromEnv OPENAI_API_KEY
+#     model: gpt-4o-mini              # default: gpt-4o-mini
+#     # endpoint: https://api.openai.com  # default: https://api.openai.com
+#     # timeout: 15s                   # default: 15s
+#     # temperature: 0.3               # optional (0.0–2.0)
+#     # max_tokens: 2048               # optional
+#
+#   - name: Translate
+#     system_prompt: "Translate the following text to English. Return only the translation."
+#     api_key: !FromEnv OPENAI_API_KEY
+#     model: gpt-4o-mini
