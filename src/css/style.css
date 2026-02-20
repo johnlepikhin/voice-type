@@ -1,0 +1,61 @@
+/* Voice Type GTK4 Theme */
+
+/* Overlay window */
+.overlay-window {
+    background-color: alpha(@window_bg_color, 0.95);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+/* Recording indicator */
+.recording-indicator {
+    color: #e74c3c;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+/* Elapsed time */
+.elapsed-time {
+    font-size: 14px;
+    color: @dim_label_color;
+    font-variant-numeric: tabular-nums;
+}
+
+/* RMS level bar */
+.rms-level {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: @accent_bg_color;
+}
+
+/* Transcription text area */
+.transcription-text {
+    font-size: 16px;
+    padding: 8px;
+}
+
+/* Loading spinner area */
+.loading-area {
+    padding: 24px;
+}
+
+/* Error message */
+.error-message {
+    color: #e74c3c;
+    font-size: 14px;
+    padding: 8px;
+}
+
+/* Action buttons */
+.confirm-button {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    font-weight: bold;
+    padding: 8px 24px;
+    border-radius: 6px;
+}
+
+.cancel-button {
+    padding: 8px 24px;
+    border-radius: 6px;
+}

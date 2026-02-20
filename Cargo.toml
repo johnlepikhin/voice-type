@@ -1,0 +1,51 @@
+[package]
+name = "voice-type"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Voice input for Linux with GTK4 and OpenAI Whisper API"
+license = "MIT"
+
+[features]
+default = []
+wayland-overlay = ["gtk4-layer-shell"]
+
+[dependencies]
+# GTK4 UI
+gtk4 = { version = "0.9", features = ["v4_6"] }
+gtk4-layer-shell = { version = "0.4", optional = true }
+glib = "0.20"
+gio = "0.20"
+
+# Audio
+cpal = "0.15"
+hound = "3.5"
+
+# HTTP
+ureq = { version = "3", features = ["json"] }
+
+# Global hotkeys
+hotkey-listener = "0.3"
+
+# Serialization & Config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+structdoc = "0.1"
+humantime-serde = "1.1"
+secstr = { version = "0.5", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"

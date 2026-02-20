@@ -1,0 +1,54 @@
+# Voice Type — example configuration
+# Copy to ~/.config/voice-type/config.yaml and adjust to your needs.
+#
+# Only the `provider` section is required; everything else has sensible defaults.
+
+# ─── Provider ────────────────────────────────────────────────────────────────
+provider:
+  openai:
+    # API key (required). Three ways to supply it:
+    #   !FromEnv     — read from an environment variable
+    #   !FromCommand — execute a shell command and use stdout
+    #   !String      — inline plaintext (not recommended)
+    api_key: !FromCommand "pass show personal/voice-type-openai-key"
+    # api_key: !FromEnv OPENAI_API_KEY
+    # api_key: !String "sk-..."
+
+    # Whisper model name.
+    model: whisper-1                # default: whisper-1
+
+    # Language hint (ISO-639-1). Improves accuracy when language is known.
+    # language: ru
+
+    # Recognition context prompt. Helps with domain-specific terms.
+    # prompt: "Voice Type, GTK, Rust, Guix"
+
+    # HTTP request timeout (humantime format: 30s, 1min, etc.).
+    timeout: 30s                    # default: 30s
+
+# ─── Audio ───────────────────────────────────────────────────────────────────
+audio:
+  # Input device name. Omit to use the system default.
+  # device: "Blue Yeti"
+
+  # Sample rate in Hz (8000–48000). 16000 is optimal for Whisper.
+  sample_rate: 16000                # default: 16000
+
+  # Silence detection threshold (RMS, 0.0–1.0). Lower = more sensitive.
+  silence_threshold: 0.01           # default: 0.01
+
+  # Maximum recording duration (humantime format).
+  max_duration: 5min                # default: 5min
+
+# ─── Hotkey ──────────────────────────────────────────────────────────────────
+hotkey:
+  # Key combination to toggle recording.
+  # Supported keys: F1–F12, ScrollLock, Pause, Insert
+  # Supported modifiers: Shift, Ctrl, Alt
+  binding: Shift+F8                 # default: Shift+F8
+
+# ─── UI ──────────────────────────────────────────────────────────────────────
+ui:
+  # Overlay window position on screen.
+  # Options: TopCenter, TopRight, BottomCenter, BottomRight, Center
+  overlay_position: TopCenter       # default: TopCenter
