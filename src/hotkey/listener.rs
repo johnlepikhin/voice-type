@@ -3,6 +3,10 @@
 //! Scans `/dev/input/event*` for keyboard devices, reads key events in a
 //! background thread, tracks modifier state (including Super/Meta), and
 //! sends press/release events over an `mpsc` channel.
+//!
+//! When possible, grabs keyboards exclusively via `EVIOCGRAB` and creates
+//! a uinput virtual keyboard to forward non-hotkey events. This prevents
+//! hotkey trigger keys from leaking to the focused application.
 
 use std::collections::HashSet;
 use std::os::fd::AsRawFd;
@@ -12,7 +16,8 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use evdev::Device;
+use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
+use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 
 use super::binding::{Modifiers, ParsedHotkey};
@@ -27,6 +32,18 @@ const RESCAN_INTERVAL: Duration = Duration::from_secs(3);
 /// Sleep between poll iterations (non-blocking reads).
 const POLL_SLEEP: Duration = Duration::from_millis(10);
 
+/// Consecutive emit failures before falling back to passive mode.
+const EMIT_FAILURE_THRESHOLD: u32 = 10;
+
+/// Whether keyboards are exclusively grabbed with uinput forwarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrabMode {
+    /// Keyboards grabbed via `EVIOCGRAB`; events forwarded through uinput.
+    Exclusive,
+    /// No grab; events pass through to applications naturally.
+    Passive,
+}
+
 /// Events emitted by the listener thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ListenerEvent {
@@ -34,6 +51,17 @@ pub(super) enum ListenerEvent {
     Pressed,
     /// The hotkey was released.
     Released,
+}
+
+/// Result of checking whether a key event is a hotkey trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HotkeyCheck {
+    /// Event consumed as hotkey; do not forward.
+    Consumed,
+    /// Not a hotkey event; forward normally.
+    Forward,
+    /// Hotkey detected and receiver is gone; stop the listener.
+    ReceiverDropped,
 }
 
 /// Start the background listener thread for the given hotkey.
@@ -49,22 +77,146 @@ pub(super) fn start_listener(
     tx: Sender<ListenerEvent>,
     running: Arc<AtomicBool>,
 ) -> Result<(), HotkeyError> {
-    let keyboards = find_keyboards()?;
+    let mut keyboards = find_keyboards()?;
     set_nonblocking(&keyboards)?;
 
     let evdev_key = hotkey.key.to_evdev();
     let hotkey_mods = hotkey.modifiers;
 
+    // Try to set up exclusive grab + uinput passthrough.
+    let virtual_device = match setup_grab(&mut keyboards) {
+        Ok(vdev) => {
+            tracing::info!("Keyboard grab active — hotkey events will be consumed");
+            Some(vdev)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Cannot grab keyboards ({e}), falling back to passive mode — \
+                 hotkey key may leak to focused application"
+            );
+            None
+        }
+    };
+
     std::thread::spawn(move || {
-        run_event_loop(keyboards, evdev_key, hotkey_mods, &tx, &running);
+        run_event_loop(
+            keyboards,
+            evdev_key,
+            hotkey_mods,
+            &tx,
+            &running,
+            virtual_device,
+        );
     });
 
     Ok(())
 }
 
+// ── Grab + uinput setup ─────────────────────────────────────────────────────
+
+/// Build a uinput virtual keyboard and grab all physical keyboards.
+///
+/// If uinput creation fails, no keyboards are grabbed (safe fallback).
+/// If any grab fails, all keyboards are ungrabbed and the error is returned.
+fn setup_grab(keyboards: &mut [Device]) -> Result<VirtualDevice, std::io::Error> {
+    let vdev = build_virtual_device(keyboards)?;
+    grab_all(keyboards)?;
+    Ok(vdev)
+}
+
+/// Grab all keyboards exclusively. On failure, ungrab any already-grabbed
+/// devices and return the error.
+fn grab_all(keyboards: &mut [Device]) -> Result<(), std::io::Error> {
+    for i in 0..keyboards.len() {
+        if let Err(e) = keyboards[i].grab() {
+            for dev in &mut keyboards[..i] {
+                let _ = dev.ungrab();
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+/// Ungrab all keyboards, ignoring errors.
+fn ungrab_all(keyboards: &mut [Device]) {
+    for device in keyboards {
+        let _ = device.ungrab();
+    }
+}
+
+/// Create a uinput virtual keyboard with the union of all real keyboards' keys.
+fn build_virtual_device(keyboards: &[Device]) -> Result<VirtualDevice, std::io::Error> {
+    let mut keys = AttributeSet::<Key>::new();
+    for device in keyboards {
+        if let Some(supported) = device.supported_keys() {
+            for key in supported {
+                keys.insert(key);
+            }
+        }
+    }
+
+    VirtualDeviceBuilder::new()?
+        .name("voice-type-passthrough")
+        .with_keys(&keys)?
+        .build()
+}
+
+// ── Hotkey state machine ────────────────────────────────────────────────────
+
+/// Check whether a key event should be consumed as a hotkey activation.
+///
+/// `value` is the raw evdev event value: 1 = press, 0 = release, 2 = repeat.
+/// Updates `hotkey_consumed` state to track press→release across modifier
+/// changes (e.g. Super released before the trigger key).
+fn check_hotkey(
+    key: evdev::Key,
+    value: i32,
+    evdev_key: evdev::Key,
+    current_mods: Modifiers,
+    hotkey_mods: Modifiers,
+    hotkey_consumed: &mut bool,
+    tx: &Sender<ListenerEvent>,
+) -> HotkeyCheck {
+    if key != evdev_key {
+        return HotkeyCheck::Forward;
+    }
+
+    if value == 1 && current_mods == hotkey_mods {
+        *hotkey_consumed = true;
+        if tx.send(ListenerEvent::Pressed).is_err() {
+            return HotkeyCheck::ReceiverDropped;
+        }
+        return HotkeyCheck::Consumed;
+    }
+
+    if *hotkey_consumed {
+        // Consume repeats and release of the trigger key.
+        if value == 0 {
+            *hotkey_consumed = false;
+            let _ = tx.send(ListenerEvent::Released);
+        }
+        return HotkeyCheck::Consumed;
+    }
+
+    HotkeyCheck::Forward
+}
+
+// ── Event forwarding ────────────────────────────────────────────────────────
+
+/// Forward an event through the virtual device. Returns `true` on success,
+/// `false` on error.
+fn forward_event(vdev: &mut VirtualDevice, event: &InputEvent) -> bool {
+    vdev.emit(&[*event]).is_ok()
+}
+
 // ── Event loop ──────────────────────────────────────────────────────────────
 
 /// Main event loop: reads from keyboards, tracks modifiers, fires events.
+///
+/// When `virtual_device` is `Some`, events are forwarded through the uinput
+/// device and hotkey trigger keys are consumed. When `None`, the listener
+/// operates in passive mode (events pass through to applications naturally).
 #[allow(clippy::too_many_lines)]
 fn run_event_loop(
     initial_keyboards: Vec<Device>,
@@ -72,9 +224,17 @@ fn run_event_loop(
     hotkey_mods: Modifiers,
     tx: &Sender<ListenerEvent>,
     running: &AtomicBool,
+    mut virtual_device: Option<VirtualDevice>,
 ) {
+    let mut grab_mode = if virtual_device.is_some() {
+        GrabMode::Exclusive
+    } else {
+        GrabMode::Passive
+    };
     let mut keyboards = initial_keyboards;
     let mut current_mods = Modifiers::default();
+    let mut hotkey_consumed = false;
+    let mut emit_err_count: u32 = 0;
     let mut known_paths: HashSet<PathBuf> = get_keyboard_paths();
     let mut last_rescan = Instant::now();
     let mut last_device_scan = Instant::now();
@@ -83,9 +243,10 @@ fn run_event_loop(
     while running.load(Ordering::Relaxed) {
         // ── Reconnect after errors ──────────────────────────────────────
         if had_error && last_rescan.elapsed() >= RESCAN_INTERVAL {
-            if let Some(new_keyboards) = try_rescan_keyboards() {
+            if let Some(new_keyboards) = try_rescan_keyboards(grab_mode) {
                 keyboards = new_keyboards;
                 current_mods = Modifiers::default();
+                hotkey_consumed = false;
                 had_error = false;
                 known_paths = get_keyboard_paths();
                 last_device_scan = Instant::now();
@@ -95,35 +256,63 @@ fn run_event_loop(
 
         // ── Hot-plug detection ──────────────────────────────────────────
         if last_device_scan.elapsed() >= DEVICE_SCAN_INTERVAL {
-            add_new_keyboards(&mut keyboards, &mut known_paths);
+            add_new_keyboards(&mut keyboards, &mut known_paths, grab_mode);
             last_device_scan = Instant::now();
         }
 
         // ── Read events ─────────────────────────────────────────────────
         let mut any_error = false;
+        let mut need_fallback = false;
+        let mut receiver_dropped = false;
 
         for device in &mut keyboards {
             match device.fetch_events() {
                 Ok(events) => {
                     for event in events {
+                        // emit() auto-appends SYN_REPORT, so skip originals.
+                        if event.event_type() == EventType::SYNCHRONIZATION {
+                            continue;
+                        }
+
                         if let evdev::InputEventKind::Key(key) = event.kind() {
                             let pressed = event.value() == 1;
                             let released = event.value() == 0;
 
                             update_modifiers(&mut current_mods, key, pressed, released);
 
-                            if key == evdev_key && current_mods == hotkey_mods {
-                                let event = if pressed {
-                                    ListenerEvent::Pressed
-                                } else if released {
-                                    ListenerEvent::Released
-                                } else {
-                                    continue;
-                                };
-                                // Receiver dropped → stop.
-                                if tx.send(event).is_err() {
-                                    running.store(false, Ordering::Relaxed);
-                                    return;
+                            let result = check_hotkey(
+                                key,
+                                event.value(),
+                                evdev_key,
+                                current_mods,
+                                hotkey_mods,
+                                &mut hotkey_consumed,
+                                tx,
+                            );
+
+                            match result {
+                                HotkeyCheck::ReceiverDropped => {
+                                    receiver_dropped = true;
+                                    break;
+                                }
+                                HotkeyCheck::Consumed => continue,
+                                HotkeyCheck::Forward => {}
+                            }
+                        }
+
+                        // Forward non-consumed events through uinput.
+                        if let Some(ref mut vdev) = virtual_device {
+                            if forward_event(vdev, &event) {
+                                emit_err_count = 0;
+                            } else {
+                                emit_err_count += 1;
+                                if emit_err_count == 1 {
+                                    tracing::warn!(
+                                        "Failed to forward event through uinput"
+                                    );
+                                }
+                                if emit_err_count >= EMIT_FAILURE_THRESHOLD {
+                                    need_fallback = true;
                                 }
                             }
                         }
@@ -138,6 +327,25 @@ fn run_event_loop(
                     }
                 }
             }
+            if receiver_dropped {
+                break;
+            }
+        }
+
+        if receiver_dropped {
+            running.store(false, Ordering::Relaxed);
+            break;
+        }
+
+        if need_fallback {
+            tracing::warn!(
+                "uinput forwarding failed {EMIT_FAILURE_THRESHOLD} times in a row, \
+                 releasing keyboard grab and falling back to passive mode"
+            );
+            ungrab_all(&mut keyboards);
+            virtual_device = None;
+            grab_mode = GrabMode::Passive;
+            emit_err_count = 0;
         }
 
         if any_error {
@@ -146,6 +354,9 @@ fn run_event_loop(
 
         std::thread::sleep(POLL_SLEEP);
     }
+
+    // Deterministic cleanup: release grabs before thread exits.
+    ungrab_all(&mut keyboards);
 }
 
 // ── Modifier tracking ───────────────────────────────────────────────────────
@@ -223,7 +434,10 @@ fn drain_events(keyboards: &mut [Device]) {
 }
 
 /// Attempt a full keyboard rescan, returning new devices if successful.
-fn try_rescan_keyboards() -> Option<Vec<Device>> {
+///
+/// When `grab_mode` is [`GrabMode::Exclusive`], newly discovered keyboards
+/// are grabbed exclusively.
+fn try_rescan_keyboards(grab_mode: GrabMode) -> Option<Vec<Device>> {
     tracing::info!("Rescanning keyboard devices...");
     let mut keyboards = find_keyboards().ok()?;
 
@@ -234,13 +448,27 @@ fn try_rescan_keyboards() -> Option<Vec<Device>> {
         return None;
     }
 
+    if grab_mode == GrabMode::Exclusive {
+        if let Err(e) = grab_all(&mut keyboards) {
+            tracing::warn!("Failed to grab keyboards during rescan: {e}");
+            return None;
+        }
+    }
+
     drain_events(&mut keyboards);
     tracing::info!("Keyboards reconnected: {} device(s)", keyboards.len());
     Some(keyboards)
 }
 
 /// Discover and add newly connected keyboards.
-fn add_new_keyboards(keyboards: &mut Vec<Device>, known_paths: &mut HashSet<PathBuf>) {
+///
+/// When `grab_mode` is [`GrabMode::Exclusive`], new keyboards are grabbed
+/// exclusively.
+fn add_new_keyboards(
+    keyboards: &mut Vec<Device>,
+    known_paths: &mut HashSet<PathBuf>,
+    grab_mode: GrabMode,
+) {
     let Ok(entries) = std::fs::read_dir("/dev/input") else {
         return;
     };
@@ -250,7 +478,7 @@ fn add_new_keyboards(keyboards: &mut Vec<Device>, known_paths: &mut HashSet<Path
         if !is_event_device(&path) || known_paths.contains(&path) {
             continue;
         }
-        if let Ok(device) = Device::open(&path) {
+        if let Ok(mut device) = Device::open(&path) {
             if is_keyboard(&device) {
                 tracing::info!(
                     "New keyboard detected: {:?} at {}",
@@ -261,6 +489,12 @@ fn add_new_keyboards(keyboards: &mut Vec<Device>, known_paths: &mut HashSet<Path
                 std::thread::sleep(Duration::from_millis(100));
 
                 if set_nonblocking(std::slice::from_ref(&device)).is_ok() {
+                    if grab_mode == GrabMode::Exclusive {
+                        if let Err(e) = device.grab() {
+                            tracing::warn!("Failed to grab new keyboard: {e}");
+                            continue;
+                        }
+                    }
                     known_paths.insert(path);
                     let mut devs = vec![device];
                     drain_events(&mut devs);
@@ -305,4 +539,149 @@ fn is_keyboard(device: &Device) -> bool {
     device
         .supported_keys()
         .is_some_and(|keys| keys.contains(evdev::Key::KEY_A))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_hotkey_press_detected() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut consumed = false;
+        let mods = Modifiers {
+            super_: true,
+            ..Modifiers::default()
+        };
+
+        let result = check_hotkey(
+            evdev::Key::KEY_I,
+            1, // pressed
+            evdev::Key::KEY_I,
+            mods,
+            mods,
+            &mut consumed,
+            &tx,
+        );
+
+        assert_eq!(result, HotkeyCheck::Consumed);
+        assert!(consumed);
+        assert_eq!(rx.try_recv().unwrap(), ListenerEvent::Pressed);
+    }
+
+    #[test]
+    fn check_hotkey_release_consumed_after_press() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut consumed = true; // simulate prior press
+        let current = Modifiers::default(); // modifiers already released
+        let expected = Modifiers {
+            super_: true,
+            ..Modifiers::default()
+        };
+
+        let result = check_hotkey(
+            evdev::Key::KEY_I,
+            0, // released
+            evdev::Key::KEY_I,
+            current,
+            expected,
+            &mut consumed,
+            &tx,
+        );
+
+        assert_eq!(result, HotkeyCheck::Consumed);
+        assert!(!consumed); // reset after release
+    }
+
+    #[test]
+    fn check_hotkey_wrong_key_forwards() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut consumed = false;
+        let mods = Modifiers {
+            super_: true,
+            ..Modifiers::default()
+        };
+
+        let result = check_hotkey(
+            evdev::Key::KEY_A,
+            1, // pressed
+            evdev::Key::KEY_I,
+            mods,
+            mods,
+            &mut consumed,
+            &tx,
+        );
+
+        assert_eq!(result, HotkeyCheck::Forward);
+        assert!(!consumed);
+    }
+
+    #[test]
+    fn check_hotkey_wrong_modifiers_forwards() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut consumed = false;
+        let current = Modifiers::default(); // no modifiers held
+        let expected = Modifiers {
+            super_: true,
+            ..Modifiers::default()
+        };
+
+        let result = check_hotkey(
+            evdev::Key::KEY_I,
+            1, // pressed
+            evdev::Key::KEY_I,
+            current,
+            expected,
+            &mut consumed,
+            &tx,
+        );
+
+        assert_eq!(result, HotkeyCheck::Forward);
+    }
+
+    #[test]
+    fn check_hotkey_repeat_consumed() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut consumed = true; // prior press consumed
+        let mods = Modifiers {
+            super_: true,
+            ..Modifiers::default()
+        };
+
+        let result = check_hotkey(
+            evdev::Key::KEY_I,
+            2, // repeat
+            evdev::Key::KEY_I,
+            mods,
+            mods,
+            &mut consumed,
+            &tx,
+        );
+
+        assert_eq!(result, HotkeyCheck::Consumed);
+        assert!(consumed); // still consumed (not released yet)
+    }
+
+    #[test]
+    fn check_hotkey_receiver_dropped() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx); // simulate dropped receiver
+        let mut consumed = false;
+        let mods = Modifiers {
+            super_: true,
+            ..Modifiers::default()
+        };
+
+        let result = check_hotkey(
+            evdev::Key::KEY_I,
+            1, // pressed
+            evdev::Key::KEY_I,
+            mods,
+            mods,
+            &mut consumed,
+            &tx,
+        );
+
+        assert_eq!(result, HotkeyCheck::ReceiverDropped);
+    }
 }
