@@ -10,6 +10,7 @@ use voice_type::audio::{AudioCapture, CaptureConfig};
 use voice_type::config::AppConfig;
 use voice_type::hotkey::{HotkeyAction, HotkeyListener};
 use voice_type::insertion;
+use voice_type::postprocess::{PipelineProgress, ProcessingPipeline};
 use voice_type::provider::{TranscribeOptions, TranscriptionProvider};
 
 pub use recording_window::build_recording_window;
@@ -31,6 +32,7 @@ enum DaemonPhase {
     Idle,
     Recording,
     Transcribing,
+    PostProcessing,
     AwaitingConfirmation,
 }
 
@@ -58,6 +60,7 @@ pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
     let silence_threshold = config.audio.silence_threshold;
 
     let (provider, transcribe_options) = config.provider.build_provider();
+    let pipeline = Arc::new(ProcessingPipeline::from_configs(&config.post_processing));
 
     let state = Rc::new(RefCell::new(DaemonState {
         phase: DaemonPhase::Idle,
@@ -128,11 +131,14 @@ pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
                         silence_threshold,
                         &provider,
                         &transcribe_options,
+                        &pipeline,
                         &overlay_ref,
                     );
                 }
-                DaemonPhase::Transcribing | DaemonPhase::AwaitingConfirmation => {
-                    // Ignore hotkey during transcription/confirmation
+                DaemonPhase::Transcribing
+                | DaemonPhase::PostProcessing
+                | DaemonPhase::AwaitingConfirmation => {
+                    // Ignore hotkey during transcription/post-processing/confirmation
                 }
             }
         }
@@ -194,6 +200,7 @@ fn stop_daemon_recording(
     silence_threshold: voice_type::types::RmsLevel,
     provider: &Arc<dyn TranscriptionProvider>,
     options: &TranscribeOptions,
+    pipeline: &Arc<ProcessingPipeline>,
     overlay: &Rc<overlay::OverlayWindow>,
 ) {
     // Stop timer
@@ -230,48 +237,117 @@ fn stop_daemon_recording(
         }
     };
 
-    // Start transcription
+    // Start transcription + post-processing on background thread
     state.borrow_mut().phase = DaemonPhase::Transcribing;
     overlay.show_transcribing();
 
     let provider = Arc::clone(provider);
+    let pipeline = Arc::clone(pipeline);
     let opts = options.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel::<PipelineProgress>();
 
     std::thread::spawn(move || {
+        // Phase 1: Transcribe
         let result = provider.transcribe(&audio_data, &opts);
-        let _ = tx.send(result);
+        let transcribed_text = match result {
+            Ok(r) => r.text,
+            Err(e) => {
+                let _ = tx.send(PipelineProgress::Failed {
+                    processor_name: "transcription".to_owned(),
+                    error: e.to_string(),
+                    original_text: String::new(),
+                });
+                return;
+            }
+        };
+
+        // Phase 2: Post-process (or skip if no processors)
+        if pipeline.is_empty() {
+            let _ = tx.send(PipelineProgress::Done {
+                text: transcribed_text.to_string(),
+            });
+        } else {
+            pipeline.run(transcribed_text.as_str(), &tx);
+        }
     });
 
-    // Poll for result
-    let state_ref = Rc::clone(state);
-    let overlay_ref = Rc::clone(overlay);
+    // Poll for progress messages
+    poll_pipeline_progress(rx, Rc::clone(state), Rc::clone(overlay));
+}
+
+/// Poll the background pipeline channel and update the overlay accordingly.
+fn poll_pipeline_progress(
+    rx: std::sync::mpsc::Receiver<PipelineProgress>,
+    state: Rc<RefCell<DaemonState>>,
+    overlay: Rc<overlay::OverlayWindow>,
+) {
     glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
-        Ok(Ok(result)) => {
-            tracing::info!(
-                "Transcription complete: {} chars",
-                result.text.as_str().len()
-            );
-            state_ref.borrow_mut().phase = DaemonPhase::AwaitingConfirmation;
-            overlay_ref.show_result(result.text.as_str());
+        Ok(PipelineProgress::StepStarted {
+            index,
+            total,
+            ref name,
+        }) => {
+            state.borrow_mut().phase = DaemonPhase::PostProcessing;
+            overlay.show_processing(index + 1, total, name);
+            glib::ControlFlow::Continue
+        }
+        Ok(PipelineProgress::Done { ref text }) => {
+            tracing::info!("Pipeline complete: {} chars", text.len());
+            state.borrow_mut().phase = DaemonPhase::AwaitingConfirmation;
+            overlay.show_result(text);
             glib::ControlFlow::Break
         }
-        Ok(Err(e)) => {
-            tracing::error!("Transcription failed: {e}");
-            overlay_ref.show_error(&e.to_string());
-            state_ref.borrow_mut().phase = DaemonPhase::Idle;
-            glib::timeout_add_local_once(Duration::from_secs(3), {
-                let o = Rc::clone(&overlay_ref);
-                move || o.hide()
-            });
+        Ok(PipelineProgress::Failed {
+            ref processor_name,
+            ref error,
+            ref original_text,
+        }) => {
+            handle_pipeline_failure(&state, &overlay, processor_name, error, original_text);
             glib::ControlFlow::Break
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-        Err(_) => {
-            tracing::error!("Transcription thread disconnected");
-            overlay_ref.show_error("Transcription failed unexpectedly");
-            state_ref.borrow_mut().phase = DaemonPhase::Idle;
+        Ok(_) => {
+            // Future PipelineProgress variants — ignore and continue polling
+            glib::ControlFlow::Continue
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            tracing::error!("Background thread disconnected");
+            overlay.show_error("Processing failed unexpectedly");
+            state.borrow_mut().phase = DaemonPhase::Idle;
             glib::ControlFlow::Break
         }
     });
+}
+
+/// Handle a pipeline failure by showing the error and falling back to original text.
+fn handle_pipeline_failure(
+    state: &Rc<RefCell<DaemonState>>,
+    overlay: &Rc<overlay::OverlayWindow>,
+    processor_name: &str,
+    error: &str,
+    original_text: &str,
+) {
+    if processor_name == "transcription" {
+        // Transcription itself failed — no text to show
+        tracing::error!("Transcription failed: {error}");
+        overlay.show_error(error);
+        state.borrow_mut().phase = DaemonPhase::Idle;
+        glib::timeout_add_local_once(Duration::from_secs(3), {
+            let o = Rc::clone(overlay);
+            move || o.hide()
+        });
+    } else {
+        // Post-processing failed — show original text for confirmation
+        tracing::error!("Post-processing failed at '{processor_name}': {error}");
+        overlay.show_error(&format!(
+            "Post-processing failed at '{processor_name}': {error}"
+        ));
+        state.borrow_mut().phase = DaemonPhase::AwaitingConfirmation;
+        // Show error briefly, then switch to editable original text
+        let text = original_text.to_owned();
+        glib::timeout_add_local_once(Duration::from_secs(2), {
+            let o = Rc::clone(overlay);
+            move || o.show_result(&text)
+        });
+    }
 }

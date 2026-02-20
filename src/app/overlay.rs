@@ -91,7 +91,14 @@ pub fn build_overlay() -> OverlayWindow {
     let on_confirm: Rc<RefCell<Option<Box<ConfirmCallback>>>> = Rc::new(RefCell::new(None));
     let on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>> = Rc::new(RefCell::new(None));
 
-    wire_callbacks(&confirm_btn, &cancel_btn, &window, &text_buf, &on_confirm, &on_cancel);
+    wire_callbacks(
+        &confirm_btn,
+        &cancel_btn,
+        &window,
+        &text_buf,
+        &on_confirm,
+        &on_cancel,
+    );
 
     OverlayWindow {
         window,
@@ -225,6 +232,20 @@ impl OverlayWindow {
         self.text_view.grab_focus();
     }
 
+    /// Show post-processing progress (e.g., "Step 1/3: Grammar...").
+    pub fn show_processing(&self, step: usize, total: usize, name: &str) {
+        self.status_label
+            .set_text(&format!("Step {step}/{total}: {name}..."));
+        self.timer_label.set_visible(false);
+        self.level_area.set_visible(false);
+        self.spinner.set_spinning(true);
+        self.spinner.set_visible(true);
+        self.scrolled.set_visible(false);
+        self.text_view.set_visible(false);
+        self.error_label.set_visible(false);
+        self.confirm_btn.set_visible(false);
+    }
+
     /// Show an error.
     pub fn show_error(&self, message: &str) {
         self.status_label.set_text("Error");
@@ -304,7 +325,13 @@ fn draw_level_bars(cr: &gtk4::cairo::Context, width: i32, height: i32, level: f3
         let radius = 2.0_f64.min(bar_width / 2.0);
         cr.new_path();
         cr.arc(bar_x + bar_width - radius, radius, radius, -FRAC_PI_2, 0.0);
-        cr.arc(bar_x + bar_width - radius, total_height - radius, radius, 0.0, FRAC_PI_2);
+        cr.arc(
+            bar_x + bar_width - radius,
+            total_height - radius,
+            radius,
+            0.0,
+            FRAC_PI_2,
+        );
         cr.arc(bar_x + radius, total_height - radius, radius, FRAC_PI_2, PI);
         cr.arc(bar_x + radius, radius, radius, PI, 3.0 * FRAC_PI_2);
         cr.close_path();
