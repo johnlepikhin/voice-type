@@ -52,6 +52,7 @@ impl OpenAiWhisperProvider {
     pub fn new(api_key: Secret, model: String, timeout: Duration) -> Self {
         let config = Agent::config_builder()
             .timeout_global(Some(timeout))
+            .max_idle_age(crate::HTTP_IDLE_TIMEOUT)
             .http_status_as_error(false)
             .build();
         let agent = Agent::new_with_config(config);

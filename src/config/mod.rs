@@ -370,6 +370,7 @@ ui:
 #     # timeout: 15s
 #     # temperature: 0.3
 #     # max_tokens: 2048
+#     # max_retries: 3
 "#
         .to_owned()
     }

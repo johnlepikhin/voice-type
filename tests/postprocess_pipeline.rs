@@ -16,6 +16,7 @@ fn dummy_config(name: &str, system_prompt: &str) -> PostProcessorConfig {
         timeout: std::time::Duration::from_millis(200),
         temperature: Some(0.3),
         max_tokens: Some(1024),
+        max_retries: 0, // No retries in tests to avoid backoff delays
     }
 }
 

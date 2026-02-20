@@ -15,6 +15,11 @@ fn default_processor_timeout() -> Duration {
     Duration::from_secs(15)
 }
 
+/// Default maximum retry attempts for transient errors.
+fn default_max_retries() -> u32 {
+    3
+}
+
 /// Default model for chat completions.
 fn default_processor_model() -> String {
     "gpt-4o-mini".to_owned()
@@ -91,6 +96,10 @@ pub struct PostProcessorConfig {
     /// Maximum tokens in LLM response. Omitted if `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+
+    /// Maximum retry attempts for transient errors (0 = no retry).
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
 }
 
 impl PostProcessorConfig {
@@ -144,6 +153,14 @@ impl PostProcessorConfig {
                 });
             }
         }
+
+        if self.max_retries > 10 {
+            errors.push(ValidationError {
+                field: format!("{prefix}.max_retries"),
+                message: format!("max_retries {} is too high (max 10)", self.max_retries),
+                suggestion: Some("Use 3 as a reasonable default".to_owned()),
+            });
+        }
     }
 }
 
@@ -175,6 +192,7 @@ mod tests {
             timeout: default_processor_timeout(),
             temperature: None,
             max_tokens: None,
+            max_retries: 3,
         };
         let mut errors = Vec::new();
         config.validate_into(0, &mut errors);
@@ -192,6 +210,7 @@ mod tests {
             timeout: default_processor_timeout(),
             temperature: None,
             max_tokens: None,
+            max_retries: 3,
         };
         let mut errors = Vec::new();
         config.validate_into(0, &mut errors);
@@ -209,10 +228,29 @@ mod tests {
             timeout: default_processor_timeout(),
             temperature: Some(3.0),
             max_tokens: None,
+            max_retries: 3,
         };
         let mut errors = Vec::new();
         config.validate_into(0, &mut errors);
         assert!(errors.iter().any(|e| e.field.contains("temperature")));
+    }
+
+    #[test]
+    fn validate_excessive_max_retries() {
+        let config = PostProcessorConfig {
+            name: ProcessorName("Test".to_owned()),
+            system_prompt: "Fix.".to_owned(),
+            api_key: Secret::from_string("test"),
+            model: "gpt-4o-mini".to_owned(),
+            endpoint: DEFAULT_CHAT_ENDPOINT.to_owned(),
+            timeout: default_processor_timeout(),
+            temperature: None,
+            max_tokens: None,
+            max_retries: 11,
+        };
+        let mut errors = Vec::new();
+        config.validate_into(0, &mut errors);
+        assert!(errors.iter().any(|e| e.field.contains("max_retries")));
     }
 
     #[test]
@@ -226,6 +264,7 @@ mod tests {
             timeout: default_processor_timeout(),
             temperature: None,
             max_tokens: Some(0),
+            max_retries: 3,
         };
         let mut errors = Vec::new();
         config.validate_into(0, &mut errors);

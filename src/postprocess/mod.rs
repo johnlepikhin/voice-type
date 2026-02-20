@@ -20,18 +20,9 @@ impl PostProcessor {
     /// Create a post-processor from configuration.
     #[must_use]
     pub fn from_config(config: &PostProcessorConfig) -> Self {
-        let client = ChatCompletionsClient::new(
-            config.api_key.clone(),
-            config.model.clone(),
-            config.endpoint.clone(),
-            config.system_prompt.clone(),
-            config.timeout,
-            config.temperature,
-            config.max_tokens,
-        );
         Self {
             name: config.name.clone(),
-            client,
+            client: ChatCompletionsClient::new(config),
         }
     }
 

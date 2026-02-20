@@ -131,6 +131,7 @@ proptest! {
         model in prop_oneof![Just("gpt-4o-mini"), Just("gpt-4o"), Just("gpt-3.5-turbo")],
         temperature in prop_oneof![Just(None), (0.0f32..=2.0f32).prop_map(Some)],
         max_tokens in prop_oneof![Just(None), (1u32..=4096u32).prop_map(Some)],
+        max_retries in 0u32..=10u32,
     ) {
         let config = PostProcessorConfig {
             name: ProcessorName::new(&name).unwrap(),
@@ -141,6 +142,7 @@ proptest! {
             timeout: std::time::Duration::from_secs(15),
             temperature,
             max_tokens,
+            max_retries,
         };
 
         let yaml = serde_yaml::to_string(&config).unwrap();
@@ -152,5 +154,6 @@ proptest! {
         prop_assert_eq!(&parsed.endpoint, &config.endpoint);
         prop_assert_eq!(parsed.temperature, config.temperature);
         prop_assert_eq!(parsed.max_tokens, config.max_tokens);
+        prop_assert_eq!(parsed.max_retries, config.max_retries);
     }
 }

@@ -172,6 +172,24 @@ pub enum PostProcessingError {
     EmptyResponse,
 }
 
+impl PostProcessingError {
+    /// Returns `true` if this error is transient and the request can be retried.
+    ///
+    /// Retryable: [`NetworkError`](Self::NetworkError), [`Timeout`](Self::Timeout),
+    /// [`ProviderError`](Self::ProviderError) with status 429 or >= 500.
+    ///
+    /// Not retryable: [`AuthenticationError`](Self::AuthenticationError),
+    /// [`EmptyResponse`](Self::EmptyResponse), other 4xx status codes.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::NetworkError(_) | Self::Timeout => true,
+            Self::ProviderError { status, .. } => *status == 429 || *status >= 500,
+            Self::AuthenticationError | Self::EmptyResponse => false,
+        }
+    }
+}
+
 /// A single validation error with suggestion.
 #[derive(Debug, Clone)]
 pub struct ValidationError {
@@ -239,6 +257,63 @@ mod tests {
 
         let err = PostProcessingError::AuthenticationError;
         assert!(err.to_string().contains("authentication"));
+    }
+
+    #[test]
+    fn retryable_network_error() {
+        let err = PostProcessingError::NetworkError("connection reset".to_owned());
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn retryable_timeout() {
+        assert!(PostProcessingError::Timeout.is_retryable());
+    }
+
+    #[test]
+    fn retryable_provider_429() {
+        let err = PostProcessingError::ProviderError {
+            status: 429,
+            message: "rate limit".to_owned(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn retryable_provider_500() {
+        let err = PostProcessingError::ProviderError {
+            status: 500,
+            message: "internal server error".to_owned(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn retryable_provider_503() {
+        let err = PostProcessingError::ProviderError {
+            status: 503,
+            message: "service unavailable".to_owned(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_authentication() {
+        assert!(!PostProcessingError::AuthenticationError.is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_provider_400() {
+        let err = PostProcessingError::ProviderError {
+            status: 400,
+            message: "bad request".to_owned(),
+        };
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_empty_response() {
+        assert!(!PostProcessingError::EmptyResponse.is_retryable());
     }
 
     #[test]
