@@ -3,6 +3,7 @@ use voice_type::config::{
     AppConfig, AudioConfig, HotkeyConfig, OpenAiProviderConfig, OverlayPosition, ProviderConfig,
     Secret, UiConfig,
 };
+use voice_type::postprocess::config::{PostProcessorConfig, ProcessorName};
 use voice_type::types::{HotkeyBinding, LanguageCode, RmsLevel, SampleRate};
 
 fn arb_secret() -> impl Strategy<Value = Secret> {
@@ -57,6 +58,7 @@ fn arb_app_config() -> impl Strategy<Value = AppConfig> {
             ui: UiConfig {
                 overlay_position: position,
             },
+            post_processing: Vec::new(),
         })
 }
 
@@ -119,5 +121,36 @@ proptest! {
     fn language_code_invalid_length(code in "[a-z]{1}|[a-z]{3,10}") {
         let lang = LanguageCode::new(&code);
         prop_assert!(lang.is_err());
+    }
+
+    #[test]
+    fn post_processor_config_yaml_roundtrip(
+        name in "[A-Za-z][A-Za-z0-9 ]{0,19}",
+        prompt in "[A-Za-z ]{5,50}",
+        secret in "[a-z]{10,20}",
+        model in prop_oneof![Just("gpt-4o-mini"), Just("gpt-4o"), Just("gpt-3.5-turbo")],
+        temperature in prop_oneof![Just(None), (0.0f32..=2.0f32).prop_map(Some)],
+        max_tokens in prop_oneof![Just(None), (1u32..=4096u32).prop_map(Some)],
+    ) {
+        let config = PostProcessorConfig {
+            name: ProcessorName::new(&name).unwrap(),
+            system_prompt: prompt.clone(),
+            api_key: Secret::from_string(&secret),
+            model: model.to_owned(),
+            endpoint: "https://api.openai.com".to_owned(),
+            timeout: std::time::Duration::from_secs(15),
+            temperature,
+            max_tokens,
+        };
+
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let parsed: PostProcessorConfig = serde_yaml::from_str(&yaml).unwrap();
+
+        prop_assert_eq!(parsed.name.as_str(), config.name.as_str());
+        prop_assert_eq!(&parsed.system_prompt, &config.system_prompt);
+        prop_assert_eq!(&parsed.model, &config.model);
+        prop_assert_eq!(&parsed.endpoint, &config.endpoint);
+        prop_assert_eq!(parsed.temperature, config.temperature);
+        prop_assert_eq!(parsed.max_tokens, config.max_tokens);
     }
 }
