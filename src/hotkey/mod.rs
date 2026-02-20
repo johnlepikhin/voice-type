@@ -96,11 +96,13 @@ mod tests {
         assert!(validate_binding("Meta+F8").is_ok());
         assert!(validate_binding("Super+Shift+F1").is_ok());
         assert!(validate_binding("Win+Delete").is_ok());
+        assert!(validate_binding("Super+I").is_ok());
+        assert!(validate_binding("Ctrl+A").is_ok());
+        assert!(validate_binding("Super+1").is_ok());
     }
 
     #[test]
     fn validate_bad_bindings() {
-        assert!(validate_binding("Ctrl+A").is_err());
         assert!(validate_binding("").is_err());
         assert!(validate_binding("Unknown").is_err());
         assert!(validate_binding("Hyper+F8").is_err());

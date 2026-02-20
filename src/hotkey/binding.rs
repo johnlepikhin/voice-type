@@ -18,7 +18,45 @@ pub struct Modifiers {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Key {
-    /// Function keys F1..F12.
+    // ── Letters ──────────────────────────────────────────────────────────
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    // ── Digits ───────────────────────────────────────────────────────────
+    Num0,
+    Num1,
+    Num2,
+    Num3,
+    Num4,
+    Num5,
+    Num6,
+    Num7,
+    Num8,
+    Num9,
+    // ── Function keys ────────────────────────────────────────────────────
     F1,
     F2,
     F3,
@@ -31,7 +69,11 @@ pub enum Key {
     F10,
     F11,
     F12,
-    /// Special keys.
+    // ── Special keys ────────────────────────────────────────────────────
+    Space,
+    Tab,
+    Escape,
+    Backspace,
     ScrollLock,
     Pause,
     Insert,
@@ -49,6 +91,45 @@ impl Key {
     /// Returns an error string if the key name is not recognized.
     pub fn parse(s: &str) -> Result<Self, String> {
         match s.to_uppercase().as_str() {
+            // Letters
+            "A" => Ok(Self::A),
+            "B" => Ok(Self::B),
+            "C" => Ok(Self::C),
+            "D" => Ok(Self::D),
+            "E" => Ok(Self::E),
+            "F" => Ok(Self::F),
+            "G" => Ok(Self::G),
+            "H" => Ok(Self::H),
+            "I" => Ok(Self::I),
+            "J" => Ok(Self::J),
+            "K" => Ok(Self::K),
+            "L" => Ok(Self::L),
+            "M" => Ok(Self::M),
+            "N" => Ok(Self::N),
+            "O" => Ok(Self::O),
+            "P" => Ok(Self::P),
+            "Q" => Ok(Self::Q),
+            "R" => Ok(Self::R),
+            "S" => Ok(Self::S),
+            "T" => Ok(Self::T),
+            "U" => Ok(Self::U),
+            "V" => Ok(Self::V),
+            "W" => Ok(Self::W),
+            "X" => Ok(Self::X),
+            "Y" => Ok(Self::Y),
+            "Z" => Ok(Self::Z),
+            // Digits
+            "0" => Ok(Self::Num0),
+            "1" => Ok(Self::Num1),
+            "2" => Ok(Self::Num2),
+            "3" => Ok(Self::Num3),
+            "4" => Ok(Self::Num4),
+            "5" => Ok(Self::Num5),
+            "6" => Ok(Self::Num6),
+            "7" => Ok(Self::Num7),
+            "8" => Ok(Self::Num8),
+            "9" => Ok(Self::Num9),
+            // Function keys
             "F1" => Ok(Self::F1),
             "F2" => Ok(Self::F2),
             "F3" => Ok(Self::F3),
@@ -61,6 +142,11 @@ impl Key {
             "F10" => Ok(Self::F10),
             "F11" => Ok(Self::F11),
             "F12" => Ok(Self::F12),
+            // Special keys
+            "SPACE" => Ok(Self::Space),
+            "TAB" => Ok(Self::Tab),
+            "ESCAPE" | "ESC" => Ok(Self::Escape),
+            "BACKSPACE" => Ok(Self::Backspace),
             "SCROLLLOCK" | "SCROLL_LOCK" => Ok(Self::ScrollLock),
             "PAUSE" => Ok(Self::Pause),
             "INSERT" => Ok(Self::Insert),
@@ -68,7 +154,7 @@ impl Key {
             "END" => Ok(Self::End),
             "PAGEUP" | "PAGE_UP" => Ok(Self::PageUp),
             "PAGEDOWN" | "PAGE_DOWN" => Ok(Self::PageDown),
-            "DELETE" => Ok(Self::Delete),
+            "DELETE" | "DEL" => Ok(Self::Delete),
             _ => Err(format!("Unknown key: {s}")),
         }
     }
@@ -77,6 +163,42 @@ impl Key {
     #[must_use]
     pub fn to_evdev(self) -> evdev::Key {
         match self {
+            Self::A => evdev::Key::KEY_A,
+            Self::B => evdev::Key::KEY_B,
+            Self::C => evdev::Key::KEY_C,
+            Self::D => evdev::Key::KEY_D,
+            Self::E => evdev::Key::KEY_E,
+            Self::F => evdev::Key::KEY_F,
+            Self::G => evdev::Key::KEY_G,
+            Self::H => evdev::Key::KEY_H,
+            Self::I => evdev::Key::KEY_I,
+            Self::J => evdev::Key::KEY_J,
+            Self::K => evdev::Key::KEY_K,
+            Self::L => evdev::Key::KEY_L,
+            Self::M => evdev::Key::KEY_M,
+            Self::N => evdev::Key::KEY_N,
+            Self::O => evdev::Key::KEY_O,
+            Self::P => evdev::Key::KEY_P,
+            Self::Q => evdev::Key::KEY_Q,
+            Self::R => evdev::Key::KEY_R,
+            Self::S => evdev::Key::KEY_S,
+            Self::T => evdev::Key::KEY_T,
+            Self::U => evdev::Key::KEY_U,
+            Self::V => evdev::Key::KEY_V,
+            Self::W => evdev::Key::KEY_W,
+            Self::X => evdev::Key::KEY_X,
+            Self::Y => evdev::Key::KEY_Y,
+            Self::Z => evdev::Key::KEY_Z,
+            Self::Num0 => evdev::Key::KEY_0,
+            Self::Num1 => evdev::Key::KEY_1,
+            Self::Num2 => evdev::Key::KEY_2,
+            Self::Num3 => evdev::Key::KEY_3,
+            Self::Num4 => evdev::Key::KEY_4,
+            Self::Num5 => evdev::Key::KEY_5,
+            Self::Num6 => evdev::Key::KEY_6,
+            Self::Num7 => evdev::Key::KEY_7,
+            Self::Num8 => evdev::Key::KEY_8,
+            Self::Num9 => evdev::Key::KEY_9,
             Self::F1 => evdev::Key::KEY_F1,
             Self::F2 => evdev::Key::KEY_F2,
             Self::F3 => evdev::Key::KEY_F3,
@@ -89,6 +211,10 @@ impl Key {
             Self::F10 => evdev::Key::KEY_F10,
             Self::F11 => evdev::Key::KEY_F11,
             Self::F12 => evdev::Key::KEY_F12,
+            Self::Space => evdev::Key::KEY_SPACE,
+            Self::Tab => evdev::Key::KEY_TAB,
+            Self::Escape => evdev::Key::KEY_ESC,
+            Self::Backspace => evdev::Key::KEY_BACKSPACE,
             Self::ScrollLock => evdev::Key::KEY_SCROLLLOCK,
             Self::Pause => evdev::Key::KEY_PAUSE,
             Self::Insert => evdev::Key::KEY_INSERT,
@@ -104,6 +230,42 @@ impl Key {
 impl std::fmt::Display for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
+            Self::D => "D",
+            Self::E => "E",
+            Self::F => "F",
+            Self::G => "G",
+            Self::H => "H",
+            Self::I => "I",
+            Self::J => "J",
+            Self::K => "K",
+            Self::L => "L",
+            Self::M => "M",
+            Self::N => "N",
+            Self::O => "O",
+            Self::P => "P",
+            Self::Q => "Q",
+            Self::R => "R",
+            Self::S => "S",
+            Self::T => "T",
+            Self::U => "U",
+            Self::V => "V",
+            Self::W => "W",
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::Z => "Z",
+            Self::Num0 => "0",
+            Self::Num1 => "1",
+            Self::Num2 => "2",
+            Self::Num3 => "3",
+            Self::Num4 => "4",
+            Self::Num5 => "5",
+            Self::Num6 => "6",
+            Self::Num7 => "7",
+            Self::Num8 => "8",
+            Self::Num9 => "9",
             Self::F1 => "F1",
             Self::F2 => "F2",
             Self::F3 => "F3",
@@ -116,6 +278,10 @@ impl std::fmt::Display for Key {
             Self::F10 => "F10",
             Self::F11 => "F11",
             Self::F12 => "F12",
+            Self::Space => "Space",
+            Self::Tab => "Tab",
+            Self::Escape => "Escape",
+            Self::Backspace => "Backspace",
             Self::ScrollLock => "ScrollLock",
             Self::Pause => "Pause",
             Self::Insert => "Insert",
@@ -264,9 +430,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_letter_keys() {
+        assert_eq!(parse_hotkey("Super+I").unwrap().key, Key::I);
+        assert_eq!(parse_hotkey("Ctrl+A").unwrap().key, Key::A);
+        assert_eq!(parse_hotkey("Super+V").unwrap().key, Key::V);
+    }
+
+    #[test]
+    fn parse_digit_keys() {
+        assert_eq!(parse_hotkey("Super+1").unwrap().key, Key::Num1);
+        assert_eq!(parse_hotkey("Ctrl+0").unwrap().key, Key::Num0);
+    }
+
+    #[test]
     fn parse_unknown_key() {
-        assert!(parse_hotkey("A").is_err());
         assert!(parse_hotkey("Unknown").is_err());
+        assert!(parse_hotkey("Ctrl+???").is_err());
     }
 
     #[test]
