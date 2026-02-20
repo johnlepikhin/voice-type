@@ -168,7 +168,9 @@ impl fmt::Display for HotkeyBinding {
 
 impl StructDoc for HotkeyBinding {
     fn document() -> Documentation {
-        Documentation::leaf("Hotkey combination (e.g., \"Shift+F8\", \"Ctrl+Alt+F9\")")
+        Documentation::leaf(
+            "Hotkey combination (e.g., \"Shift+F8\", \"Super+F9\", \"Ctrl+Alt+Delete\")",
+        )
     }
 }
 

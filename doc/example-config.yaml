@@ -43,8 +43,8 @@ audio:
 # ─── Hotkey ──────────────────────────────────────────────────────────────────
 hotkey:
   # Key combination to toggle recording.
-  # Supported keys: F1–F12, ScrollLock, Pause, Insert
-  # Supported modifiers: Shift, Ctrl, Alt
+  # Supported keys: F1–F12, ScrollLock, Pause, Insert, Home, End, PageUp, PageDown, Delete
+  # Supported modifiers: Shift, Ctrl, Alt, Super (aliases: Meta, Win)
   binding: Shift+F8                 # default: Shift+F8
 
 # ─── UI ──────────────────────────────────────────────────────────────────────

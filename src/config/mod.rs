@@ -301,7 +301,7 @@ impl AppConfig {
                 field: "hotkey.binding".to_owned(),
                 message: e.to_string(),
                 suggestion: Some(
-                    "Use format like \"Shift+F8\" or \"Ctrl+Alt+F9\" (F1-F12, ScrollLock, Pause, Insert + Ctrl/Alt/Shift)".to_owned(),
+                    "Use format like \"Shift+F8\" or \"Super+F9\" (F1-F12, ScrollLock, Pause, Insert, Home, End, PageUp, PageDown, Delete + Ctrl/Alt/Shift/Super)".to_owned(),
                 ),
             });
         }
@@ -346,7 +346,7 @@ audio:
   max_duration: 5min
 
 hotkey:
-  binding: Shift+F8
+  binding: Shift+F8          # Modifiers: Ctrl/Alt/Shift/Super
 
 ui:
   overlay_position: TopCenter

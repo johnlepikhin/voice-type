@@ -24,8 +24,10 @@ hound = "3.5"
 # HTTP
 ureq = { version = "3", features = ["json"] }
 
-# Global hotkeys
-hotkey-listener = "0.3"
+# Global hotkeys (evdev-based, Linux-only)
+evdev = "0.12"
+nix = { version = "0.29", features = ["fs"] }
+libc = "0.2"
 
 # Serialization & Config
 serde = { version = "1", features = ["derive"] }
