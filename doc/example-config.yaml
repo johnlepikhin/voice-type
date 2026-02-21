@@ -47,12 +47,6 @@ hotkey:
   # Supported modifiers: Shift, Ctrl, Alt, Super (aliases: Meta, Win)
   binding: Shift+F8                 # default: Shift+F8
 
-# ─── UI ──────────────────────────────────────────────────────────────────────
-ui:
-  # Overlay window position on screen.
-  # Options: TopCenter, TopRight, BottomCenter, BottomRight, Center
-  overlay_position: TopCenter       # default: TopCenter
-
 # ─── Post-Processing ────────────────────────────────────────────────────────
 # Optional pipeline of LLM-based text processors. Each processor receives the
 # output of the previous one (or the raw transcription for the first step).

@@ -16,12 +16,12 @@ src/
 ├── config/              # AppConfig, Secret, serde
 ├── audio/               # cpal-based audio capture
 ├── provider/            # TranscriptionProvider trait + OpenAI impl
-├── hotkey/              # evdev-based global hotkeys
-├── insertion/           # Clipboard + paste text insertion
+├── postprocess/         # Post-processing pipeline (LLM chat completions)
+├── http.rs              # Shared OpenAI-compatible HTTP helpers
 ├── types.rs             # Newtypes (RmsLevel, TranscribedText, etc.)
 ├── error.rs             # thiserror error types
 ├── main.rs              # GTK application entry point
-├── app/                 # GTK widgets (recording window, overlay)
+├── app/                 # GTK widgets (overlay)
 ├── cli.rs               # clap CLI definitions
 └── css/                 # External CSS theme files
 tests/                   # Integration and property-based tests

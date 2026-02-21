@@ -140,10 +140,10 @@ audio:
         "validate",
     ]);
 
-    assert_ne!(code, 0, "Validation should fail for bad sample_rate");
+    assert_ne!(code, 0, "Should fail for bad sample_rate");
     assert!(
-        stderr.contains("sample_rate") || stderr.contains("validation"),
-        "Should mention the invalid field"
+        stderr.contains("sample_rate") || stderr.contains("Sample rate"),
+        "Should mention the invalid field, got: {stderr}"
     );
 }
 

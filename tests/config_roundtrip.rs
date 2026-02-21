@@ -1,7 +1,5 @@
 use proptest::prelude::*;
-use voice_type::config::{
-    AppConfig, AudioConfig, OpenAiProviderConfig, OverlayPosition, ProviderConfig, Secret, UiConfig,
-};
+use voice_type::config::{AppConfig, AudioConfig, OpenAiProviderConfig, ProviderConfig, Secret};
 use voice_type::postprocess::config::{PostProcessorConfig, ProcessorName};
 use voice_type::types::{LanguageCode, RmsLevel, SampleRate};
 
@@ -20,24 +18,9 @@ fn arb_language_code() -> impl Strategy<Value = Option<LanguageCode>> {
     ]
 }
 
-fn arb_overlay_position() -> impl Strategy<Value = OverlayPosition> {
-    prop_oneof![
-        Just(OverlayPosition::TopCenter),
-        Just(OverlayPosition::TopRight),
-        Just(OverlayPosition::BottomCenter),
-        Just(OverlayPosition::BottomRight),
-        Just(OverlayPosition::Center),
-    ]
-}
-
 fn arb_app_config() -> impl Strategy<Value = AppConfig> {
-    (
-        arb_secret(),
-        arb_language_code(),
-        arb_overlay_position(),
-        8000u32..=48000u32,
-    )
-        .prop_map(|(secret, language, position, sample_rate)| AppConfig {
+    (arb_secret(), arb_language_code(), 8000u32..=48000u32).prop_map(
+        |(secret, language, sample_rate)| AppConfig {
             provider: ProviderConfig::OpenAi(OpenAiProviderConfig {
                 api_key: secret,
                 model: "whisper-1".to_owned(),
@@ -51,11 +34,9 @@ fn arb_app_config() -> impl Strategy<Value = AppConfig> {
                 silence_threshold: RmsLevel::new(0.01),
                 max_duration: std::time::Duration::from_secs(300),
             },
-            ui: UiConfig {
-                overlay_position: position,
-            },
             post_processing: Vec::new(),
-        })
+        },
+    )
 }
 
 proptest! {
@@ -75,7 +56,6 @@ proptest! {
             _ => prop_assert!(false, "Provider variant mismatch"),
         }
         prop_assert_eq!(parsed.audio.sample_rate.hz(), config.audio.sample_rate.hz());
-        prop_assert_eq!(parsed.ui.overlay_position, config.ui.overlay_position);
     }
 
     #[test]

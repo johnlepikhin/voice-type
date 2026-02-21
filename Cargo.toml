@@ -6,16 +6,10 @@ rust-version = "1.88"
 description = "Voice input for Linux with GTK4 and OpenAI Whisper API"
 license = "MIT"
 
-[features]
-default = []
-wayland-overlay = ["gtk4-layer-shell"]
-
 [dependencies]
 # GTK4 UI
 gtk4 = { version = "0.9", features = ["v4_6"] }
-gtk4-layer-shell = { version = "0.4", optional = true }
 glib = "0.20"
-gio = "0.20"
 
 # Audio
 cpal = "0.15"
