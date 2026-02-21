@@ -126,14 +126,18 @@ fn wire_callbacks(
 }
 
 /// Invoke a stored callback, catching panics.
+///
+/// Takes the callback from the slot, invokes it, and restores it.
+/// If the callback panics, it is NOT restored to prevent re-invoking broken code.
 fn invoke_callback(slot: &Rc<RefCell<Option<Box<Callback>>>>) {
     let f = slot.borrow_mut().take();
-    if let Some(ref f) = f {
-        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-            eprintln!("PANIC in callback: {e:?}");
+    if let Some(f) = f {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f)).is_ok() {
+            *slot.borrow_mut() = Some(f);
+        } else {
+            eprintln!("PANIC in callback — callback disabled");
         }
     }
-    *slot.borrow_mut() = f;
 }
 
 /// Wrapper for the overlay window with access to its widgets.
@@ -145,6 +149,7 @@ pub struct OverlayWindow {
     level_value: Rc<Cell<f32>>,
     spinner: Spinner,
     error_label: Label,
+    // Buttons are stored to prevent drop; callbacks are already wired in wire_callbacks().
     _stop_btn: Button,
     _cancel_btn: Button,
     on_cancel: Rc<RefCell<Option<Box<Callback>>>>,

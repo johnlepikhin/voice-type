@@ -29,12 +29,6 @@ impl From<&str> for SecUtf8String {
     }
 }
 
-impl From<secstr::SecUtf8> for SecUtf8String {
-    fn from(v: secstr::SecUtf8) -> Self {
-        Self(v)
-    }
-}
-
 impl Deref for SecUtf8String {
     type Target = secstr::SecUtf8;
 
@@ -128,25 +122,60 @@ impl Secret {
     }
 }
 
+/// Maximum time to wait for a secret command to complete.
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Poll interval when waiting for a secret command.
+const COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Execute a shell command and return its stdout.
+///
+/// The command is killed if it doesn't complete within [`COMMAND_TIMEOUT`].
 fn run_command(command: &str) -> Result<String, String> {
     tracing::debug!("Running secret command {:?}", command);
-    let output = std::process::Command::new("/bin/sh")
+    let mut child = std::process::Command::new("sh")
         .args(["-c", command])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|err| format!("Failed to run secret command: {err}"))?;
 
-    if !output.status.success() {
+    // Poll with try_wait because std::process::Child has no wait_timeout in stable Rust.
+    let deadline = std::time::Instant::now() + COMMAND_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "Secret command timed out after {}s",
+                        COMMAND_TIMEOUT.as_secs()
+                    ));
+                }
+                std::thread::sleep(COMMAND_POLL_INTERVAL);
+            }
+            Err(e) => return Err(format!("Failed to wait for secret command: {e}")),
+        }
+    };
+
+    if !status.success() {
+        let mut stderr = String::new();
+        if let Some(mut err_stream) = child.stderr.take() {
+            let _ = std::io::Read::read_to_string(&mut err_stream, &mut stderr);
+        }
         return Err(format!(
-            "Secret command failed with status {}: {}",
-            output.status,
-            std::string::String::from_utf8_lossy(&output.stderr)
+            "Secret command failed with status {status}: {stderr}"
         ));
     }
 
-    std::string::String::from_utf8(output.stdout)
-        .map(|s| s.trim_end().to_owned())
-        .map_err(|e| format!("Invalid UTF-8 in command output: {e}"))
+    let mut stdout = String::new();
+    if let Some(mut out_stream) = child.stdout.take() {
+        std::io::Read::read_to_string(&mut out_stream, &mut stdout)
+            .map_err(|e| format!("Failed to read command output: {e}"))?;
+    }
+    Ok(stdout.trim_end().to_owned())
 }
 
 #[cfg(test)]
@@ -163,12 +192,10 @@ mod tests {
 
     #[test]
     fn secret_from_env() {
-        // SAFETY: test runs single-threaded via `cargo test -- --test-threads=1` or
-        // is the only test touching this specific env var name.
-        unsafe { std::env::set_var("VOICE_TYPE_TEST_SECRET", "env-value") };
-        let secret = Secret::FromEnv("VOICE_TYPE_TEST_SECRET".to_owned());
-        assert_eq!(secret.unsecure().unwrap(), "env-value");
-        unsafe { std::env::remove_var("VOICE_TYPE_TEST_SECRET") };
+        // Use HOME which is guaranteed to exist, avoiding unsafe set_var.
+        let secret = Secret::FromEnv("HOME".to_owned());
+        let result = secret.unsecure().unwrap();
+        assert!(!result.is_empty());
     }
 
     #[test]

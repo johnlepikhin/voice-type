@@ -22,10 +22,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub audio: AudioConfig,
 
-    /// UI preferences.
-    #[serde(default)]
-    pub ui: UiConfig,
-
     /// Post-processing pipeline (zero or more processors).
     #[serde(default)]
     pub post_processing: Vec<PostProcessorConfig>,
@@ -104,29 +100,6 @@ pub struct OpenAiProviderConfig {
 }
 
 impl ProviderConfig {
-    /// Build a transcription provider and options from this config.
-    #[must_use]
-    pub fn build_provider(
-        &self,
-    ) -> (
-        std::sync::Arc<dyn crate::provider::TranscriptionProvider>,
-        crate::provider::TranscribeOptions,
-    ) {
-        match self {
-            Self::OpenAi(c) => (
-                std::sync::Arc::new(crate::provider::openai::OpenAiWhisperProvider::new(
-                    c.api_key.clone(),
-                    c.model.clone(),
-                    c.timeout,
-                )),
-                crate::provider::TranscribeOptions {
-                    language: c.language.clone(),
-                    prompt: c.prompt.clone(),
-                },
-            ),
-        }
-    }
-
     /// Validate provider-specific fields, appending errors.
     fn validate_into(&self, errors: &mut Vec<ValidationError>) {
         match self {
@@ -137,17 +110,6 @@ impl ProviderConfig {
                         message: "model cannot be empty".to_owned(),
                         suggestion: Some("Use \"whisper-1\"".to_owned()),
                     });
-                }
-                if let Some(ref lang) = c.language {
-                    if LanguageCode::new(lang.as_str()).is_err() {
-                        errors.push(ValidationError {
-                            field: "provider.openai.language".to_owned(),
-                            message: format!("{:?} is not a valid ISO-639-1 code", lang.as_str()),
-                            suggestion: Some(
-                                "Use a 2-letter code like \"en\" or \"ru\"".to_owned(),
-                            ),
-                        });
-                    }
                 }
             }
         }
@@ -205,36 +167,6 @@ fn default_max_duration() -> Duration {
     Duration::from_secs(300) // 5min
 }
 
-/// UI preferences.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, StructDoc)]
-pub struct UiConfig {
-    /// Overlay window position.
-    #[serde(default)]
-    pub overlay_position: OverlayPosition,
-}
-
-/// Overlay window position on screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, StructDoc)]
-#[non_exhaustive]
-pub enum OverlayPosition {
-    /// Top center of the screen.
-    TopCenter,
-    /// Top right corner.
-    TopRight,
-    /// Bottom center.
-    BottomCenter,
-    /// Bottom right corner.
-    BottomRight,
-    /// Center of the screen.
-    Center,
-}
-
-impl Default for OverlayPosition {
-    fn default() -> Self {
-        Self::TopCenter
-    }
-}
-
 impl AppConfig {
     /// Load configuration from a YAML file.
     ///
@@ -264,29 +196,6 @@ impl AppConfig {
 
         // Validate provider
         self.provider.validate_into(&mut errors);
-
-        // Validate audio
-        if !(8_000..=48_000).contains(&self.audio.sample_rate.hz()) {
-            errors.push(ValidationError {
-                field: "audio.sample_rate".to_owned(),
-                message: format!(
-                    "value {} is out of range (8000..=48000)",
-                    self.audio.sample_rate.hz()
-                ),
-                suggestion: Some("Use 16000 for optimal Whisper performance".to_owned()),
-            });
-        }
-
-        if !(0.0..=1.0).contains(&self.audio.silence_threshold.value()) {
-            errors.push(ValidationError {
-                field: "audio.silence_threshold".to_owned(),
-                message: format!(
-                    "value {} is out of range (0.0..=1.0)",
-                    self.audio.silence_threshold.value()
-                ),
-                suggestion: Some("Use 0.01 as a reasonable default".to_owned()),
-            });
-        }
 
         // Validate post-processing
         for (i, processor) in self.post_processing.iter().enumerate() {
@@ -332,9 +241,6 @@ audio:
   silence_threshold: 0.01
   max_duration: 5min
 
-ui:
-  overlay_position: TopCenter
-
 # post_processing:             # Optional: LLM post-processing pipeline
 #   - name: Grammar
 #     system_prompt: "Fix grammar and punctuation. Return only the corrected text."
@@ -366,9 +272,6 @@ audio:
   sample_rate: 16000
   silence_threshold: 0.01
   max_duration: 5min
-
-ui:
-  overlay_position: TopCenter
 "
     }
 
@@ -391,7 +294,7 @@ ui:
     }
 
     #[test]
-    fn validate_bad_sample_rate() {
+    fn bad_sample_rate_rejected_at_parse() {
         let yaml = r"
 provider:
   openai:
@@ -399,14 +302,10 @@ provider:
 audio:
   sample_rate: 0
 ";
-        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let err = config.validate().unwrap_err();
-        match err {
-            ConfigError::ValidationErrors(ref errors) => {
-                assert!(errors.iter().any(|e| e.field == "audio.sample_rate"));
-            }
-            _ => panic!("Expected ValidationErrors"),
-        }
+        let result = serde_yaml::from_str::<AppConfig>(yaml);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Sample rate"), "unexpected error: {msg}");
     }
 
     #[test]
@@ -414,13 +313,6 @@ audio:
         let yaml = AppConfig::default_yaml();
         let config: AppConfig = serde_yaml::from_str(&yaml).unwrap();
         assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn overlay_position_serde() {
-        let yaml = "TopRight";
-        let pos: OverlayPosition = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(pos, OverlayPosition::TopRight);
     }
 
     #[test]

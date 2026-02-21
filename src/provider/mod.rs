@@ -1,7 +1,9 @@
 pub mod openai;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::ProviderConfig;
 use crate::error::TranscriptionError;
 use crate::types::{LanguageCode, TranscribedText};
 
@@ -30,6 +32,24 @@ pub struct TranscriptionResult {
     pub text: TranscribedText,
     /// How long the transcription request took.
     pub request_duration: Duration,
+}
+
+/// Build a transcription provider and options from config.
+#[must_use]
+pub fn from_config(config: &ProviderConfig) -> (Arc<dyn TranscriptionProvider>, TranscribeOptions) {
+    match config {
+        ProviderConfig::OpenAi(c) => (
+            Arc::new(openai::OpenAiWhisperProvider::new(
+                c.api_key.clone(),
+                c.model.clone(),
+                c.timeout,
+            )),
+            TranscribeOptions {
+                language: c.language.clone(),
+                prompt: c.prompt.clone(),
+            },
+        ),
+    }
 }
 
 /// A speech-to-text transcription service.

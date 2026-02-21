@@ -44,18 +44,6 @@ pub struct CapturedAudio {
     pub duration: Duration,
 }
 
-/// List available input device names.
-///
-/// # Errors
-/// Returns `RecordingError` if the audio host cannot enumerate devices.
-pub fn list_input_devices() -> Result<Vec<String>, RecordingError> {
-    let host = cpal::default_host();
-    let devices = host
-        .input_devices()
-        .map_err(|e| RecordingError::DeviceError(e.to_string()))?;
-    Ok(devices.filter_map(|d| d.name().ok()).collect())
-}
-
 /// Find an input device by name, or the system default.
 fn find_device(name: Option<&str>) -> Result<Device, RecordingError> {
     let host = cpal::default_host();
@@ -173,10 +161,16 @@ impl AudioCapture {
         drop(self.stream);
         let duration = self.started_at.elapsed();
         let samples = match Arc::try_unwrap(self.samples) {
-            Ok(mutex) => mutex.into_inner().unwrap_or_default(),
+            Ok(mutex) => mutex.into_inner().unwrap_or_else(|e| {
+                tracing::warn!("Audio sample mutex was poisoned, recovering samples");
+                e.into_inner()
+            }),
             Err(arc) => arc
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Audio sample mutex was poisoned, recovering samples");
+                    e.into_inner()
+                })
                 .clone(),
         };
 

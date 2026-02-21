@@ -21,28 +21,10 @@
     font-variant-numeric: tabular-nums;
 }
 
-/* RMS level bar */
-.rms-level {
-    min-height: 4px;
-    border-radius: 2px;
-    background-color: @accent_bg_color;
-}
-
 /* VU meter (DrawingArea bars) */
 .level-meter {
     margin-top: 4px;
     margin-bottom: 4px;
-}
-
-/* Transcription text area */
-.transcription-text {
-    font-size: 16px;
-    padding: 8px;
-}
-
-/* Loading spinner area */
-.loading-area {
-    padding: 24px;
 }
 
 /* Error message */
@@ -53,7 +35,7 @@
 }
 
 /* Action buttons */
-.confirm-button {
+.stop-button {
     background-color: @accent_bg_color;
     color: @accent_fg_color;
     font-weight: bold;

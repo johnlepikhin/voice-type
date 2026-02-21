@@ -31,8 +31,15 @@ fn default_processor_endpoint() -> String {
 }
 
 /// Human-readable processor name used in progress display and error messages.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProcessorName(String);
+
+impl<'de> Deserialize<'de> for ProcessorName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Self::new(&name).map_err(serde::de::Error::custom)
+    }
+}
 
 impl ProcessorName {
     /// Create a new processor name.
@@ -107,14 +114,6 @@ impl PostProcessorConfig {
     pub fn validate_into(&self, index: usize, errors: &mut Vec<ValidationError>) {
         let prefix = format!("post_processing[{index}]");
 
-        if self.name.as_str().trim().is_empty() {
-            errors.push(ValidationError {
-                field: format!("{prefix}.name"),
-                message: "name cannot be empty".to_owned(),
-                suggestion: Some("Provide a descriptive name like \"Grammar\"".to_owned()),
-            });
-        }
-
         if self.system_prompt.trim().is_empty() {
             errors.push(ValidationError {
                 field: format!("{prefix}.system_prompt"),
@@ -182,21 +181,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_empty_name() {
-        let config = PostProcessorConfig {
-            name: ProcessorName(String::new()),
-            system_prompt: "Fix grammar.".to_owned(),
-            api_key: Secret::from_string("test"),
-            model: "gpt-4o-mini".to_owned(),
-            endpoint: DEFAULT_CHAT_ENDPOINT.to_owned(),
-            timeout: default_processor_timeout(),
-            temperature: None,
-            max_tokens: None,
-            max_retries: 3,
-        };
-        let mut errors = Vec::new();
-        config.validate_into(0, &mut errors);
-        assert!(errors.iter().any(|e| e.field.contains("name")));
+    fn empty_name_rejected_at_parse() {
+        let yaml = r#"
+name: ""
+system_prompt: "Fix grammar."
+api_key: !String "test"
+"#;
+        let result = serde_yaml::from_str::<PostProcessorConfig>(yaml);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("empty"), "unexpected error: {msg}");
     }
 
     #[test]

@@ -4,8 +4,15 @@ use serde::{Deserialize, Serialize};
 use structdoc::{Documentation, StructDoc};
 
 /// Audio RMS level normalized to 0.0..=1.0.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct RmsLevel(f32);
+
+impl<'de> Deserialize<'de> for RmsLevel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = f32::deserialize(deserializer)?;
+        Ok(Self::new(value))
+    }
+}
 
 impl RmsLevel {
     /// Create a new RMS level, clamping to [0.0, 1.0].
@@ -57,15 +64,16 @@ impl fmt::Display for TranscribedText {
     }
 }
 
-impl From<String> for TranscribedText {
-    fn from(s: String) -> Self {
-        Self(s)
+/// ISO-639-1 language code (e.g., "ru", "en").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LanguageCode(String);
+
+impl<'de> Deserialize<'de> for LanguageCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let code = String::deserialize(deserializer)?;
+        Self::new(&code).map_err(serde::de::Error::custom)
     }
 }
-
-/// ISO-639-1 language code (e.g., "ru", "en").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LanguageCode(String);
 
 impl LanguageCode {
     /// Create a new language code. Must be a 2-letter lowercase string.
@@ -102,8 +110,15 @@ impl StructDoc for LanguageCode {
 }
 
 /// Audio sample rate in Hz.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct SampleRate(u32);
+
+impl<'de> Deserialize<'de> for SampleRate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let hz = u32::deserialize(deserializer)?;
+        Self::new(hz).map_err(serde::de::Error::custom)
+    }
+}
 
 impl SampleRate {
     /// Whisper-optimal sample rate.
