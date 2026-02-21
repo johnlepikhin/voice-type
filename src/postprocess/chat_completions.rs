@@ -15,6 +15,9 @@ const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 /// Sends a system prompt + user text to the chat completions API
 /// and returns the assistant's response content. Runs on a background
 /// thread (blocking HTTP via ureq).
+///
+/// Uses a shared [`Agent`] for connection pooling across multiple clients,
+/// with per-request timeout override.
 pub struct ChatCompletionsClient {
     agent: Agent,
     api_key: crate::config::Secret,
@@ -24,6 +27,7 @@ pub struct ChatCompletionsClient {
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     max_retries: u32,
+    timeout: Duration,
 }
 
 /// Chat completion request body.
@@ -76,17 +80,13 @@ struct OpenAiErrorDetail {
 
 impl ChatCompletionsClient {
     /// Create a new chat completions client from processor configuration.
+    ///
+    /// The `agent` is shared across multiple clients for connection pool reuse.
+    /// Per-request timeout is applied from the processor config.
     #[must_use]
-    pub fn new(config: &PostProcessorConfig) -> Self {
-        let agent_config = Agent::config_builder()
-            .timeout_global(Some(config.timeout))
-            .max_idle_age(crate::HTTP_IDLE_TIMEOUT)
-            .http_status_as_error(false)
-            .build();
-        let agent = Agent::new_with_config(agent_config);
-
+    pub fn new(config: &PostProcessorConfig, agent: &Agent) -> Self {
         Self {
-            agent,
+            agent: agent.clone(),
             api_key: config.api_key.clone(),
             model: config.model.clone(),
             endpoint: config.endpoint.clone(),
@@ -94,6 +94,7 @@ impl ChatCompletionsClient {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             max_retries: config.max_retries,
+            timeout: config.timeout,
         }
     }
 
@@ -165,6 +166,9 @@ impl ChatCompletionsClient {
         let result = self
             .agent
             .post(&url)
+            .config()
+            .timeout_global(Some(self.timeout))
+            .build()
             .header("Authorization", &auth_header)
             .header("Content-Type", "application/json")
             .send(&body_json);

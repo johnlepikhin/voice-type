@@ -1,19 +1,16 @@
 pub mod overlay;
-pub mod recording_window;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gtk4::prelude::*;
+
 use voice_type::audio::{AudioCapture, CaptureConfig};
 use voice_type::config::AppConfig;
-use voice_type::hotkey::{HotkeyAction, HotkeyListener};
-use voice_type::insertion;
 use voice_type::postprocess::{PipelineProgress, ProcessingPipeline};
-use voice_type::provider::{TranscribeOptions, TranscriptionProvider};
-
-pub use recording_window::build_recording_window;
+use voice_type::provider::TranscribeOptions;
 
 /// Load the application CSS stylesheet.
 pub fn load_css() {
@@ -26,31 +23,26 @@ pub fn load_css() {
     );
 }
 
-/// Daemon phase state machine.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DaemonPhase {
-    Idle,
-    Recording,
-    Transcribing,
-    PostProcessing,
-}
-
-/// Shared daemon state.
-struct DaemonState {
-    phase: DaemonPhase,
+/// Shared state for the record flow.
+struct RecordState {
     capture: Option<AudioCapture>,
     timer_source: Option<glib::SourceId>,
+    confirmed: bool,
 }
 
-/// Build and run the daemon mode GTK application.
+/// Run the record flow: show overlay, record, transcribe, print to stdout.
 ///
-/// The daemon:
-/// 1. Starts a global hotkey listener in a background thread
-/// 2. Polls for hotkey events on the glib main loop
-/// 3. Toggles recording on hotkey press
-/// 4. Transcribes and post-processes the audio
-/// 5. Auto-inserts text into the previously focused window
-pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
+/// The overlay starts recording immediately. Press Enter to stop and process,
+/// Escape to cancel. Final text is printed to stdout.
+#[allow(clippy::too_many_lines)]
+pub fn run_record(app: &gtk4::Application, config: &AppConfig) {
+    app.connect_shutdown(|app| {
+        tracing::debug!(
+            window_count = app.windows().len(),
+            "GTK application shutdown signal"
+        );
+    });
+
     let capture_config = CaptureConfig {
         device_name: config.audio.device.clone(),
         sample_rate: config.audio.sample_rate.hz(),
@@ -61,176 +53,189 @@ pub fn run_daemon(_app: &gtk4::Application, config: &AppConfig) {
     let (provider, transcribe_options) = config.provider.build_provider();
     let pipeline = Arc::new(ProcessingPipeline::from_configs(&config.post_processing));
 
-    let state = Rc::new(RefCell::new(DaemonState {
-        phase: DaemonPhase::Idle,
+    let state = Rc::new(RefCell::new(RecordState {
         capture: None,
         timer_source: None,
+        confirmed: false,
     }));
 
     let overlay = Rc::new(overlay::build_overlay());
+    overlay.window().set_application(Some(app));
+    tracing::debug!(
+        window_visible = overlay.window().is_visible(),
+        window_mapped = overlay.window().is_mapped(),
+        "Overlay window created"
+    );
 
-    {
-        let state_for_cancel = Rc::clone(&state);
-        let overlay_for_cancel = Rc::clone(&overlay);
-        overlay.set_on_cancel(move || {
-            tracing::info!("Transcription cancelled");
-            let mut s = state_for_cancel.borrow_mut();
-            if let Some(source) = s.timer_source.take() {
-                source.remove();
+    // Start recording immediately
+    match AudioCapture::start(&capture_config) {
+        Ok(capture) => {
+            state.borrow_mut().capture = Some(capture);
+            overlay.show_recording();
+            tracing::info!("Recording started, press Enter to stop or Escape to cancel");
+            tracing::debug!(
+                window_visible = overlay.window().is_visible(),
+                window_mapped = overlay.window().is_mapped(),
+                "Overlay shown for recording"
+            );
+        }
+        Err(e) => {
+            eprintln!("Failed to start recording: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    // Timer: update elapsed/RMS and auto-stop on max duration
+    let state_for_timer = Rc::clone(&state);
+    let overlay_for_timer = Rc::clone(&overlay);
+    let app_for_timer = app.clone();
+    let provider_for_timer = Arc::clone(&provider);
+    let opts_for_timer = transcribe_options.clone();
+    let pipeline_for_timer = Arc::clone(&pipeline);
+    let source = glib::timeout_add_local(Duration::from_millis(100), move || {
+        tracing::trace!("Timer tick");
+        let borrow = state_for_timer.borrow();
+        if let Some(ref cap) = borrow.capture {
+            if cap.has_stream_error() {
+                drop(borrow);
+                eprintln!("Microphone disconnected during recording");
+                std::process::exit(1);
             }
-            s.capture.take(); // drop stops recording
-            s.phase = DaemonPhase::Idle;
-            drop(s); // release borrow before calling overlay
-            overlay_for_cancel.hide();
+            if cap.is_max_duration_reached() {
+                drop(borrow);
+                stop_and_process(
+                    &state_for_timer,
+                    silence_threshold,
+                    &provider_for_timer,
+                    &opts_for_timer,
+                    &pipeline_for_timer,
+                    &overlay_for_timer,
+                    &app_for_timer,
+                );
+                return glib::ControlFlow::Break;
+            }
+            overlay_for_timer.update_timer(cap.elapsed());
+            overlay_for_timer.update_level(cap.current_rms().value());
+            glib::ControlFlow::Continue
+        } else {
+            glib::ControlFlow::Break
+        }
+    });
+    state.borrow_mut().timer_source = Some(source);
+
+    // Enter → stop and process
+    {
+        let state_ref = Rc::clone(&state);
+        let overlay_ref = Rc::clone(&overlay);
+        let app_ref = app.clone();
+        let provider_ref = Arc::clone(&provider);
+        let opts_ref = transcribe_options;
+        let pipeline_ref = Arc::clone(&pipeline);
+        overlay.set_on_confirm(move || {
+            stop_and_process(
+                &state_ref,
+                silence_threshold,
+                &provider_ref,
+                &opts_ref,
+                &pipeline_ref,
+                &overlay_ref,
+                &app_ref,
+            );
         });
     }
 
-    // Start hotkey listener
-    let hotkey_listener = match HotkeyListener::start(&config.hotkey.binding) {
-        Ok(listener) => listener,
-        Err(e) => {
-            tracing::error!("Failed to start hotkey listener: {e}");
-            tracing::error!("Make sure you have permission to read /dev/input devices");
-            return;
-        }
-    };
-
-    tracing::info!(
-        "Daemon started. Press {} to toggle recording.",
-        config.hotkey.binding
-    );
-
-    // Poll for hotkey events every 50ms
-    let overlay_ref = Rc::clone(&overlay);
-    glib::timeout_add_local(Duration::from_millis(50), move || {
-        if let Some(HotkeyAction::Toggle) = hotkey_listener.try_recv() {
-            let current_phase = state.borrow().phase.clone();
-            match current_phase {
-                DaemonPhase::Idle => {
-                    start_daemon_recording(&state, &capture_config, &overlay_ref);
-                }
-                DaemonPhase::Recording => {
-                    stop_daemon_recording(
-                        &state,
-                        silence_threshold,
-                        &provider,
-                        &transcribe_options,
-                        &pipeline,
-                        &overlay_ref,
-                    );
-                }
-                DaemonPhase::Transcribing | DaemonPhase::PostProcessing => {
-                    // Ignore hotkey during transcription/post-processing
-                }
-            }
-        }
-        glib::ControlFlow::Continue
-    });
-}
-
-fn start_daemon_recording(
-    state: &Rc<RefCell<DaemonState>>,
-    capture_config: &CaptureConfig,
-    overlay: &Rc<overlay::OverlayWindow>,
-) {
-    match AudioCapture::start(capture_config) {
-        Ok(capture) => {
-            {
-                let mut s = state.borrow_mut();
-                s.phase = DaemonPhase::Recording;
-                s.capture = Some(capture);
-            }
-
-            overlay.show_recording();
-
-            // Timer updates + stream error/max duration checks
-            let state_ref = Rc::clone(state);
-            let overlay_ref = Rc::clone(overlay);
-            let source = glib::timeout_add_local(Duration::from_millis(100), move || {
-                let borrow = state_ref.borrow();
-                if let Some(ref cap) = borrow.capture {
-                    if cap.has_stream_error() {
-                        tracing::warn!("Audio stream error detected during daemon recording");
-                        overlay_ref
-                            .show_error("Microphone disconnected. Partial audio may be available.");
-                        return glib::ControlFlow::Break;
-                    }
-                    if cap.is_max_duration_reached() {
-                        tracing::info!("Max recording duration reached");
-                        return glib::ControlFlow::Break;
-                    }
-                    overlay_ref.update_timer(cap.elapsed());
-                    overlay_ref.update_level(cap.current_rms().value());
-                    glib::ControlFlow::Continue
-                } else {
-                    glib::ControlFlow::Break
-                }
-            });
-            state.borrow_mut().timer_source = Some(source);
-
-            tracing::info!("Recording started");
-        }
-        Err(e) => {
-            tracing::error!("Failed to start recording: {e}");
-            overlay.show_error(&e.to_string());
-        }
+    // Escape → cancel
+    {
+        let app_ref = app.clone();
+        overlay.set_on_cancel(move || {
+            tracing::debug!("Cancel (Escape) pressed");
+            app_ref.quit();
+            std::process::exit(1);
+        });
     }
+
+    tracing::debug!(
+        window_count = app.windows().len(),
+        is_registered = app.is_registered(),
+        "run_record finished, returning to main loop"
+    );
 }
 
-fn stop_daemon_recording(
-    state: &Rc<RefCell<DaemonState>>,
+/// Stop recording, encode, transcribe, post-process, and print result.
+#[allow(clippy::too_many_lines)]
+fn stop_and_process(
+    state: &Rc<RefCell<RecordState>>,
     silence_threshold: voice_type::types::RmsLevel,
-    provider: &Arc<dyn TranscriptionProvider>,
+    provider: &Arc<dyn voice_type::provider::TranscriptionProvider>,
     options: &TranscribeOptions,
     pipeline: &Arc<ProcessingPipeline>,
     overlay: &Rc<overlay::OverlayWindow>,
+    app: &gtk4::Application,
 ) {
+    tracing::debug!("stop_and_process called");
+
+    // Guard against double-confirm
+    {
+        let mut s = state.borrow_mut();
+        if s.confirmed {
+            tracing::debug!("stop_and_process: already confirmed, skipping");
+            return;
+        }
+        s.confirmed = true;
+    }
+
     // Stop timer
     if let Some(source) = state.borrow_mut().timer_source.take() {
         source.remove();
+        tracing::debug!("Timer source removed");
     }
 
     let capture = state.borrow_mut().capture.take();
-    let Some(cap) = capture else { return };
+    let Some(cap) = capture else {
+        tracing::warn!("stop_and_process: no capture to stop");
+        return;
+    };
     let captured = cap.stop();
 
-    tracing::info!("Recording stopped, duration: {:?}", captured.duration);
+    tracing::info!(
+        duration = ?captured.duration,
+        sample_count = captured.samples.len(),
+        "Recording stopped"
+    );
 
     // Silence check
     if captured.is_silence(silence_threshold) {
-        tracing::warn!("Recording was silence");
-        overlay.show_error("No speech detected. Speak louder or check your microphone.");
-        state.borrow_mut().phase = DaemonPhase::Idle;
-        glib::timeout_add_local_once(Duration::from_secs(3), {
-            let o = Rc::clone(overlay);
-            move || o.hide()
-        });
-        return;
+        eprintln!("No speech detected. Speak louder or check your microphone.");
+        std::process::exit(1);
     }
 
     // Encode WAV
     let audio_data = match captured.into_audio_data() {
         Ok(data) => data,
         Err(e) => {
-            tracing::error!("WAV encoding failed: {e}");
-            overlay.show_error(&e.to_string());
-            state.borrow_mut().phase = DaemonPhase::Idle;
-            return;
+            eprintln!("WAV encoding failed: {e}");
+            std::process::exit(1);
         }
     };
 
-    // Start transcription + post-processing on background thread
-    state.borrow_mut().phase = DaemonPhase::Transcribing;
+    // Show transcribing state
     overlay.show_transcribing();
+    tracing::debug!("Spawning transcription thread");
 
+    // Spawn background thread: transcribe → post-process
     let provider = Arc::clone(provider);
     let pipeline = Arc::clone(pipeline);
     let opts = options.clone();
     let (tx, rx) = std::sync::mpsc::channel::<PipelineProgress>();
 
     std::thread::spawn(move || {
-        // Phase 1: Transcribe
+        voice_type::log_memory_usage("transcription_start");
+
         let result = provider.transcribe(&audio_data, &opts);
+        drop(audio_data);
+
+        voice_type::log_memory_usage("transcription_done");
+
         let transcribed_text = match result {
             Ok(r) => r.text,
             Err(e) => {
@@ -243,7 +248,6 @@ fn stop_daemon_recording(
             }
         };
 
-        // Phase 2: Post-process (or skip if no processors)
         if pipeline.is_empty() {
             let _ = tx.send(PipelineProgress::Done {
                 text: transcribed_text.to_string(),
@@ -251,31 +255,26 @@ fn stop_daemon_recording(
         } else {
             pipeline.run(transcribed_text.as_str(), &tx);
         }
+
+        voice_type::log_memory_usage("pipeline_done");
     });
 
-    // Poll for progress messages
-    poll_pipeline_progress(rx, Rc::clone(state), Rc::clone(overlay));
-}
-
-/// Poll the background pipeline channel and update the overlay accordingly.
-fn poll_pipeline_progress(
-    rx: std::sync::mpsc::Receiver<PipelineProgress>,
-    state: Rc<RefCell<DaemonState>>,
-    overlay: Rc<overlay::OverlayWindow>,
-) {
+    // Poll for progress
+    let overlay_ref = Rc::clone(overlay);
+    let app_ref = app.clone();
     glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
         Ok(PipelineProgress::StepStarted {
             index,
             total,
             ref name,
         }) => {
-            state.borrow_mut().phase = DaemonPhase::PostProcessing;
-            overlay.show_processing(index + 1, total, name);
+            overlay_ref.show_processing(index + 1, total, name);
             glib::ControlFlow::Continue
         }
         Ok(PipelineProgress::Done { ref text }) => {
-            tracing::info!("Pipeline complete: {} chars, inserting", text.len());
-            insert_and_finish(&state, &overlay, text);
+            tracing::debug!(text_len = text.len(), "Pipeline done, printing result");
+            println!("{text}");
+            app_ref.quit();
             glib::ControlFlow::Break
         }
         Ok(PipelineProgress::Failed {
@@ -283,57 +282,21 @@ fn poll_pipeline_progress(
             ref error,
             ref original_text,
         }) => {
-            handle_pipeline_failure(&state, &overlay, processor_name, error, original_text);
+            if processor_name == "transcription" {
+                eprintln!("Transcription failed: {error}");
+                std::process::exit(1);
+            } else {
+                // Post-processing failed — print original text
+                eprintln!("Post-processing '{processor_name}' failed: {error}");
+                println!("{original_text}");
+                app_ref.quit();
+            }
             glib::ControlFlow::Break
         }
-        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-        Ok(_) => {
-            // Future PipelineProgress variants — ignore and continue polling
-            glib::ControlFlow::Continue
-        }
+        Err(std::sync::mpsc::TryRecvError::Empty) | Ok(_) => glib::ControlFlow::Continue,
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            tracing::error!("Background thread disconnected");
-            overlay.show_error("Processing failed unexpectedly");
-            state.borrow_mut().phase = DaemonPhase::Idle;
-            glib::ControlFlow::Break
+            eprintln!("Processing thread terminated unexpectedly");
+            std::process::exit(1);
         }
     });
-}
-
-/// Insert text into the focused window and reset daemon to idle.
-fn insert_and_finish(
-    state: &Rc<RefCell<DaemonState>>,
-    overlay: &Rc<overlay::OverlayWindow>,
-    text: &str,
-) {
-    if let Err(e) = insertion::insert_text(text) {
-        tracing::error!("Text insertion failed: {e}");
-    }
-    state.borrow_mut().phase = DaemonPhase::Idle;
-    overlay.hide();
-}
-
-/// Handle a pipeline failure by showing the error and falling back to original text.
-fn handle_pipeline_failure(
-    state: &Rc<RefCell<DaemonState>>,
-    overlay: &Rc<overlay::OverlayWindow>,
-    processor_name: &str,
-    error: &str,
-    original_text: &str,
-) {
-    if processor_name == "transcription" {
-        // Transcription itself failed — no text to show
-        tracing::error!("Transcription failed: {error}");
-        overlay.show_error(error);
-        state.borrow_mut().phase = DaemonPhase::Idle;
-        glib::timeout_add_local_once(Duration::from_secs(3), {
-            let o = Rc::clone(overlay);
-            move || o.hide()
-        });
-    } else {
-        // Post-processing failed — insert original text directly
-        tracing::error!("Post-processing failed at '{processor_name}': {error}");
-        tracing::info!("Falling back to original text: {} chars", original_text.len());
-        insert_and_finish(state, overlay, original_text);
-    }
 }

@@ -8,7 +8,7 @@ use structdoc::StructDoc;
 
 use crate::error::{ConfigError, ValidationError};
 use crate::postprocess::config::PostProcessorConfig;
-use crate::types::{HotkeyBinding, LanguageCode, RmsLevel, SampleRate};
+use crate::types::{LanguageCode, RmsLevel, SampleRate};
 
 pub use secret::Secret;
 
@@ -21,10 +21,6 @@ pub struct AppConfig {
     /// Audio capture settings.
     #[serde(default)]
     pub audio: AudioConfig,
-
-    /// Hotkey binding for daemon mode.
-    #[serde(default)]
-    pub hotkey: HotkeyConfig,
 
     /// UI preferences.
     #[serde(default)]
@@ -209,14 +205,6 @@ fn default_max_duration() -> Duration {
     Duration::from_secs(300) // 5min
 }
 
-/// Hotkey configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, StructDoc)]
-pub struct HotkeyConfig {
-    /// Key combination for toggle recording.
-    #[serde(default)]
-    pub binding: HotkeyBinding,
-}
-
 /// UI preferences.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, StructDoc)]
 pub struct UiConfig {
@@ -305,17 +293,6 @@ impl AppConfig {
             processor.validate_into(i, &mut errors);
         }
 
-        // Validate hotkey
-        if let Err(e) = crate::hotkey::validate_binding(self.hotkey.binding.as_str()) {
-            errors.push(ValidationError {
-                field: "hotkey.binding".to_owned(),
-                message: e.to_string(),
-                suggestion: Some(
-                    "Use format like \"Shift+F8\" or \"Super+F9\" (F1-F12, ScrollLock, Pause, Insert, Home, End, PageUp, PageDown, Delete + Ctrl/Alt/Shift/Super)".to_owned(),
-                ),
-            });
-        }
-
         if errors.is_empty() {
             Ok(())
         } else {
@@ -355,9 +332,6 @@ audio:
   silence_threshold: 0.01
   max_duration: 5min
 
-hotkey:
-  binding: Shift+F8          # Modifiers: Ctrl/Alt/Shift/Super
-
 ui:
   overlay_position: TopCenter
 
@@ -393,9 +367,6 @@ audio:
   silence_threshold: 0.01
   max_duration: 5min
 
-hotkey:
-  binding: Shift+F8
-
 ui:
   overlay_position: TopCenter
 "
@@ -411,7 +382,6 @@ ui:
             }
         }
         assert_eq!(config.audio.sample_rate.hz(), 16_000);
-        assert_eq!(config.hotkey.binding.as_str(), "Shift+F8");
     }
 
     #[test]

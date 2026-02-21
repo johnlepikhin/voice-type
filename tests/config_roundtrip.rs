@@ -1,10 +1,9 @@
 use proptest::prelude::*;
 use voice_type::config::{
-    AppConfig, AudioConfig, HotkeyConfig, OpenAiProviderConfig, OverlayPosition, ProviderConfig,
-    Secret, UiConfig,
+    AppConfig, AudioConfig, OpenAiProviderConfig, OverlayPosition, ProviderConfig, Secret, UiConfig,
 };
 use voice_type::postprocess::config::{PostProcessorConfig, ProcessorName};
-use voice_type::types::{HotkeyBinding, LanguageCode, RmsLevel, SampleRate};
+use voice_type::types::{LanguageCode, RmsLevel, SampleRate};
 
 fn arb_secret() -> impl Strategy<Value = Secret> {
     prop_oneof![
@@ -51,9 +50,6 @@ fn arb_app_config() -> impl Strategy<Value = AppConfig> {
                 sample_rate: SampleRate::new(sample_rate).unwrap(),
                 silence_threshold: RmsLevel::new(0.01),
                 max_duration: std::time::Duration::from_secs(300),
-            },
-            hotkey: HotkeyConfig {
-                binding: HotkeyBinding::default(),
             },
             ui: UiConfig {
                 overlay_position: position,

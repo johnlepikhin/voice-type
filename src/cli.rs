@@ -20,7 +20,7 @@ pub struct Cli {
 /// Available commands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// One-shot voice recording and transcription.
+    /// Record voice and print transcription to stdout.
     Record {
         /// Audio input device (overrides config).
         #[arg(short, long)]
@@ -33,20 +33,6 @@ pub enum Commands {
         /// Recognition prompt (overrides config).
         #[arg(short, long)]
         prompt: Option<String>,
-    },
-
-    /// Start background daemon.
-    Daemon,
-
-    /// Stop running daemon.
-    Stop,
-
-    /// Show daemon status (not yet implemented).
-    #[command(hide = true)]
-    Status {
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
     },
 
     /// Configuration management.
@@ -100,7 +86,11 @@ mod tests {
         let cli = Cli {
             config: "~/.config/voice-type.yaml".to_owned(),
             verbose: 0,
-            command: Commands::Daemon,
+            command: Commands::Record {
+                device: None,
+                language: None,
+                prompt: None,
+            },
         };
         let path = cli.config_path();
         assert!(!path.to_str().unwrap().contains('~'));
@@ -111,7 +101,11 @@ mod tests {
         let cli = Cli {
             config: "/etc/voice-type.yaml".to_owned(),
             verbose: 0,
-            command: Commands::Daemon,
+            command: Commands::Record {
+                device: None,
+                language: None,
+                prompt: None,
+            },
         };
         let path = cli.config_path();
         assert_eq!(path.to_str().unwrap(), "/etc/voice-type.yaml");

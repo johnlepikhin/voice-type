@@ -150,6 +150,9 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
             .header("Content-Type", &content_type)
             .send(&body);
 
+        // Free the multipart body (~20MB for 5-min recording) before parsing response.
+        drop(body);
+
         let request_duration = start.elapsed();
 
         let mut response = match result {

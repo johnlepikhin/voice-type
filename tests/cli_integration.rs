@@ -21,11 +21,9 @@ fn help_shows_all_commands() {
     let (code, stdout, _stderr) = run_voice_type(&["--help"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("record"));
-    assert!(stdout.contains("daemon"));
-    assert!(stdout.contains("stop"));
-    // status is hidden (not yet implemented)
-    assert!(!stdout.contains("status"));
     assert!(stdout.contains("config"));
+    assert!(!stdout.contains("daemon"));
+    assert!(!stdout.contains("stop"));
 }
 
 #[test]

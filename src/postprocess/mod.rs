@@ -2,6 +2,9 @@ pub mod chat_completions;
 pub mod config;
 
 use std::sync::mpsc::Sender;
+use std::sync::OnceLock;
+
+use ureq::Agent;
 
 use crate::error::PostProcessingError;
 
@@ -17,12 +20,12 @@ pub struct PostProcessor {
 }
 
 impl PostProcessor {
-    /// Create a post-processor from configuration.
+    /// Create a post-processor from configuration using a shared HTTP agent.
     #[must_use]
-    pub fn from_config(config: &PostProcessorConfig) -> Self {
+    pub fn from_config(config: &PostProcessorConfig, agent: &Agent) -> Self {
         Self {
             name: config.name.clone(),
-            client: ChatCompletionsClient::new(config),
+            client: ChatCompletionsClient::new(config, agent),
         }
     }
 
@@ -96,30 +99,71 @@ pub enum PipelineProgress {
 }
 
 /// An ordered sequence of post-processors that run sequentially.
+///
+/// Processors and their shared HTTP agent are created lazily on the
+/// first call to [`run()`](Self::run), keeping idle daemon memory low.
 pub struct ProcessingPipeline {
-    processors: Vec<PostProcessor>,
+    configs: Vec<PostProcessorConfig>,
+    processors: OnceLock<Vec<PostProcessor>>,
+}
+
+/// Create a shared HTTP agent for post-processor connections.
+///
+/// The agent has no default timeout (each request sets its own)
+/// and uses the project-wide idle connection age.
+fn create_shared_agent() -> Agent {
+    let config = Agent::config_builder()
+        .max_idle_age(crate::HTTP_IDLE_TIMEOUT)
+        .http_status_as_error(false)
+        .build();
+    Agent::new_with_config(config)
 }
 
 impl ProcessingPipeline {
     /// Build a pipeline from a list of processor configs.
+    ///
+    /// Stores configs only; processors and the shared HTTP [`Agent`] are
+    /// created lazily on the first [`run()`](Self::run) call.
     #[must_use]
     pub fn from_configs(configs: &[PostProcessorConfig]) -> Self {
-        let processors = configs.iter().map(PostProcessor::from_config).collect();
-        Self { processors }
+        Self {
+            configs: configs.to_vec(),
+            processors: OnceLock::new(),
+        }
     }
 
-    /// Returns `true` if the pipeline has no processors.
+    /// Returns `true` if the pipeline has no processors configured.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.processors.is_empty()
+        self.configs.is_empty()
+    }
+
+    /// Returns `true` if processors have been initialized.
+    #[cfg(test)]
+    fn is_initialized(&self) -> bool {
+        self.processors.get().is_some()
+    }
+
+    /// Get or create the processors, initializing on first access.
+    fn get_processors(&self) -> &[PostProcessor] {
+        self.processors.get_or_init(|| {
+            let agent = create_shared_agent();
+            self.configs
+                .iter()
+                .map(|c| PostProcessor::from_config(c, &agent))
+                .collect()
+        })
     }
 
     /// Run the pipeline, sending progress updates via the channel.
     ///
     /// Each processor runs sequentially. On failure, the pipeline stops
     /// and sends a `Failed` message with the original text.
+    /// Processors are created lazily on the first call.
     pub fn run(&self, text: &str, progress: &Sender<PipelineProgress>) {
-        if self.processors.is_empty() {
+        let processors = self.get_processors();
+
+        if processors.is_empty() {
             let _ = progress.send(PipelineProgress::Done {
                 text: text.to_owned(),
             });
@@ -128,9 +172,9 @@ impl ProcessingPipeline {
 
         let original = text.to_owned();
         let mut current = text.to_owned();
-        let total = self.processors.len();
+        let total = processors.len();
 
-        for (index, processor) in self.processors.iter().enumerate() {
+        for (index, processor) in processors.iter().enumerate() {
             let _ = progress.send(PipelineProgress::StepStarted {
                 index,
                 total,
@@ -204,9 +248,7 @@ mod tests {
     #[test]
     fn empty_pipeline_sends_done_with_original() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let pipeline = ProcessingPipeline {
-            processors: Vec::new(),
-        };
+        let pipeline = ProcessingPipeline::from_configs(&[]);
         pipeline.run("hello", &tx);
         drop(tx);
 
@@ -261,5 +303,28 @@ mod tests {
         assert!(
             matches!(&msgs[2], PipelineProgress::Failed { processor_name, original_text, .. } if processor_name == "Translate" && original_text == "original text")
         );
+    }
+
+    #[test]
+    fn lazy_init_not_triggered_at_construction() {
+        use crate::config::Secret;
+
+        let configs = vec![super::config::PostProcessorConfig {
+            name: ProcessorName::new("Test").unwrap(),
+            system_prompt: "Fix grammar.".to_owned(),
+            api_key: Secret::from_string("test-key"),
+            model: "gpt-4o-mini".to_owned(),
+            endpoint: "http://192.0.2.1".to_owned(),
+            timeout: std::time::Duration::from_millis(200),
+            temperature: None,
+            max_tokens: None,
+            max_retries: 0,
+        }];
+
+        let pipeline = ProcessingPipeline::from_configs(&configs);
+
+        // Processors and Agent should NOT be created yet
+        assert!(!pipeline.is_initialized());
+        assert!(!pipeline.is_empty());
     }
 }

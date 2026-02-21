@@ -5,10 +5,7 @@ mod cli;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use gtk4::gio;
 use gtk4::prelude::*;
-
-const DAEMON_APP_ID: &str = "com.voicetype.daemon";
 
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
@@ -20,11 +17,10 @@ fn main() -> Result<()> {
         _ => tracing::Level::TRACE,
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into()),
-        )
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level.to_string()));
+
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     match cli.command {
         cli::Commands::Record {
@@ -32,20 +28,11 @@ fn main() -> Result<()> {
             ref language,
             ref prompt,
         } => cmd_record(&cli, device.clone(), language.clone(), prompt.clone()),
-        cli::Commands::Daemon => cmd_daemon(&cli),
-        cli::Commands::Stop => {
-            cmd_stop();
-            Ok(())
-        }
-        cli::Commands::Status { .. } => {
-            tracing::warn!("Status command not yet implemented");
-            Ok(())
-        }
         cli::Commands::Config { ref command } => cmd_config(&cli, command),
     }
 }
 
-/// Execute the `record` command: open a GTK window for one-shot recording.
+/// Execute the `record` command: show overlay, record, transcribe, print to stdout.
 fn cmd_record(
     cli: &cli::Cli,
     device: Option<String>,
@@ -78,79 +65,49 @@ fn cmd_record(
         .validate()
         .context("Configuration validation failed")?;
 
+    tracing::debug!(?config_path, "Config loaded");
+
     let application = gtk4::Application::builder()
         .application_id("com.voicetype.record")
+        .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
+
+    tracing::debug!(
+        app_id = application.application_id().map(|s| s.to_string()).as_deref(),
+        flags = ?application.flags(),
+        is_registered = application.is_registered(),
+        is_remote = application.is_remote(),
+        "GApplication created"
+    );
 
     let config_for_activate = config;
     application.connect_activate(move |app| {
+        tracing::debug!(
+            is_registered = app.is_registered(),
+            is_remote = app.is_remote(),
+            "GTK activate signal fired"
+        );
         app::load_css();
-        let window = app::build_recording_window(app, &config_for_activate);
-        window.present();
+        app::run_record(app, &config_for_activate);
+        tracing::debug!(
+            window_count = app.windows().len(),
+            "run_record returned, activate handler done"
+        );
     });
 
-    application.run_with_args::<String>(&[]);
+    application.connect_startup(|app| {
+        tracing::debug!(
+            is_registered = app.is_registered(),
+            is_remote = app.is_remote(),
+            "GTK startup signal fired"
+        );
+    });
+
+    tracing::debug!("Calling hold() + run_with_args");
+    let _hold = application.hold();
+    let exit_code = application.run_with_args(&["voice-type"]);
+    tracing::debug!(?exit_code, "GTK main loop exited");
     Ok(())
-}
-
-/// Execute the `daemon` command: run background service with hotkey listener.
-fn cmd_daemon(cli: &cli::Cli) -> Result<()> {
-    let config_path = cli.config_path();
-    let config = voice_type::config::AppConfig::load(&config_path)
-        .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
-    config
-        .validate()
-        .context("Configuration validation failed")?;
-
-    let application = gtk4::Application::builder()
-        .application_id(DAEMON_APP_ID)
-        .flags(gio::ApplicationFlags::IS_SERVICE)
-        .build();
-
-    let config_for_startup = config;
-    let initialized = std::cell::Cell::new(false);
-
-    // Use `startup` for initialization — IS_SERVICE apps don't auto-activate.
-    application.connect_startup(move |app_ref| {
-        if initialized.get() {
-            return;
-        }
-        initialized.set(true);
-
-        app::load_css();
-        app::run_daemon(app_ref, &config_for_startup);
-    });
-
-    // Re-activation from `voice-type stop` → shut down gracefully.
-    application.connect_activate(|app_ref| {
-        tracing::info!("Received stop signal, shutting down...");
-        app_ref.quit();
-    });
-
-    // Hold the application so it stays alive.
-    let _hold_guard = application.hold();
-
-    application.run_with_args::<String>(&[]);
-    Ok(())
-}
-
-/// Execute the `stop` command: send quit signal to running daemon via D-Bus.
-fn cmd_stop() {
-    let app = gio::Application::new(Some(DAEMON_APP_ID), gio::ApplicationFlags::empty());
-
-    if let Err(e) = app.register(None::<&gio::Cancellable>) {
-        eprintln!("Cannot connect to D-Bus: {e}");
-        return;
-    }
-
-    if app.is_remote() {
-        // Sending activate() to the primary instance triggers its
-        // re-activation handler, which calls quit().
-        app.activate();
-        println!("Stopping voice-type daemon...");
-    } else {
-        println!("No running daemon found.");
-    }
 }
 
 /// Execute config subcommands.

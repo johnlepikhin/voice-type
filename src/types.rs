@@ -63,42 +63,6 @@ impl From<String> for TranscribedText {
     }
 }
 
-/// User-edited text ready for insertion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfirmedText(String);
-
-impl ConfirmedText {
-    /// Create new confirmed text.
-    #[must_use]
-    pub fn new(text: String) -> Self {
-        Self(text)
-    }
-
-    /// Get the text content.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for ConfirmedText {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for ConfirmedText {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<TranscribedText> for ConfirmedText {
-    fn from(t: TranscribedText) -> Self {
-        Self(t.0)
-    }
-}
-
 /// ISO-639-1 language code (e.g., "ru", "en").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LanguageCode(String);
@@ -134,49 +98,6 @@ impl fmt::Display for LanguageCode {
 impl StructDoc for LanguageCode {
     fn document() -> Documentation {
         Documentation::leaf("ISO-639-1 language code (e.g., \"en\", \"ru\")")
-    }
-}
-
-/// Hotkey combination (e.g., "Shift+F8").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HotkeyBinding(String);
-
-impl HotkeyBinding {
-    /// Create a new hotkey binding from a string like "Shift+F8".
-    ///
-    /// # Errors
-    /// Returns error if the binding is empty.
-    pub fn new(binding: &str) -> Result<Self, String> {
-        if binding.is_empty() {
-            return Err("Hotkey binding cannot be empty".to_owned());
-        }
-        Ok(Self(binding.to_owned()))
-    }
-
-    /// Get the binding as a string slice.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for HotkeyBinding {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl StructDoc for HotkeyBinding {
-    fn document() -> Documentation {
-        Documentation::leaf(
-            "Hotkey combination (e.g., \"Shift+F8\", \"Super+F9\", \"Ctrl+Alt+Delete\")",
-        )
-    }
-}
-
-impl Default for HotkeyBinding {
-    fn default() -> Self {
-        Self("Shift+F8".to_owned())
     }
 }
 
@@ -255,25 +176,11 @@ mod tests {
     }
 
     #[test]
-    fn hotkey_binding_validation() {
-        assert!(HotkeyBinding::new("Shift+F8").is_ok());
-        assert!(HotkeyBinding::new("Ctrl+Shift+R").is_ok());
-        assert!(HotkeyBinding::new("").is_err());
-    }
-
-    #[test]
     fn sample_rate_validation() {
         assert!(SampleRate::new(16_000).is_ok());
         assert!(SampleRate::new(8_000).is_ok());
         assert!(SampleRate::new(48_000).is_ok());
         assert!(SampleRate::new(0).is_err());
         assert!(SampleRate::new(100_000).is_err());
-    }
-
-    #[test]
-    fn confirmed_text_from_transcribed() {
-        let t = TranscribedText::new("hello".to_owned());
-        let c = ConfirmedText::from(t);
-        assert_eq!(c.as_str(), "hello");
     }
 }

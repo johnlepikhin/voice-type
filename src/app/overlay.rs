@@ -4,15 +4,15 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Button, DrawingArea, Label, Orientation, Spinner, Window};
 
-type CancelCallback = dyn Fn();
+type Callback = dyn Fn();
 
-/// Build the compact overlay window for daemon mode status display.
+/// Build the compact overlay window for recording status display.
 ///
 /// Layout: status label, spinner, error area, cancel button.
-/// Keyboard: Escape to cancel.
+/// Keyboard: Escape to cancel, Enter to confirm.
 ///
-/// Cancel callback is set after construction via [`OverlayWindow::set_on_cancel`],
-/// allowing the caller to pass an `Rc<OverlayWindow>` into the closure.
+/// Callbacks are set after construction via [`OverlayWindow::set_on_cancel`]
+/// and [`OverlayWindow::set_on_confirm`].
 pub fn build_overlay() -> OverlayWindow {
     let window = Window::builder()
         .title("Voice Type")
@@ -47,21 +47,33 @@ pub fn build_overlay() -> OverlayWindow {
     error_label.set_wrap(true);
     error_label.set_visible(false);
 
+    let stop_btn = Button::with_label("Stop");
+    stop_btn.add_css_class("stop-button");
+
     let cancel_btn = Button::with_label("Cancel");
     cancel_btn.add_css_class("cancel-button");
+
+    let button_box = GtkBox::new(Orientation::Horizontal, 8);
+    button_box.set_halign(gtk4::Align::Center);
+    button_box.append(&stop_btn);
+    button_box.append(&cancel_btn);
 
     main_box.append(&status_label);
     main_box.append(&timer_label);
     main_box.append(&level_area);
     main_box.append(&spinner);
     main_box.append(&error_label);
-    main_box.append(&cancel_btn);
+    main_box.append(&button_box);
 
     window.set_child(Some(&main_box));
 
-    let on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>> = Rc::new(RefCell::new(None));
+    // Stop button gets default focus so Enter activates it
+    stop_btn.grab_focus();
 
-    wire_callbacks(&cancel_btn, &window, &on_cancel);
+    let on_cancel: Rc<RefCell<Option<Box<Callback>>>> = Rc::new(RefCell::new(None));
+    let on_confirm: Rc<RefCell<Option<Box<Callback>>>> = Rc::new(RefCell::new(None));
+
+    wire_callbacks(&stop_btn, &cancel_btn, &window, &on_cancel, &on_confirm);
 
     OverlayWindow {
         window,
@@ -71,37 +83,57 @@ pub fn build_overlay() -> OverlayWindow {
         level_value,
         spinner,
         error_label,
+        _stop_btn: stop_btn,
         _cancel_btn: cancel_btn,
         on_cancel,
+        on_confirm,
     }
 }
 
-/// Connect cancel button click and the Escape key to the cancel callback slot.
+/// Connect stop/cancel button clicks and keyboard shortcuts to callback slots.
 fn wire_callbacks(
+    stop_btn: &Button,
     cancel_btn: &Button,
     window: &Window,
-    on_cancel: &Rc<RefCell<Option<Box<CancelCallback>>>>,
+    on_cancel: &Rc<RefCell<Option<Box<Callback>>>>,
+    on_confirm: &Rc<RefCell<Option<Box<Callback>>>>,
 ) {
+    let cb = Rc::clone(on_confirm);
+    stop_btn.connect_clicked(move |_| {
+        invoke_callback(&cb);
+    });
+
     let cb = Rc::clone(on_cancel);
     cancel_btn.connect_clicked(move |_| {
-        if let Some(ref f) = *cb.borrow() {
-            f();
-        }
+        invoke_callback(&cb);
     });
 
     let key_controller = gtk4::EventControllerKey::new();
-    let cb = Rc::clone(on_cancel);
+    let cancel_cb = Rc::clone(on_cancel);
+    let confirm_cb = Rc::clone(on_confirm);
     key_controller.connect_key_pressed(move |_, key, _, _| {
         if key == gtk4::gdk::Key::Escape {
-            if let Some(ref f) = *cb.borrow() {
-                f();
-            }
+            invoke_callback(&cancel_cb);
+            gtk4::glib::Propagation::Stop
+        } else if key == gtk4::gdk::Key::Return || key == gtk4::gdk::Key::KP_Enter {
+            invoke_callback(&confirm_cb);
             gtk4::glib::Propagation::Stop
         } else {
             gtk4::glib::Propagation::Proceed
         }
     });
     window.add_controller(key_controller);
+}
+
+/// Invoke a stored callback, catching panics.
+fn invoke_callback(slot: &Rc<RefCell<Option<Box<Callback>>>>) {
+    let f = slot.borrow_mut().take();
+    if let Some(ref f) = f {
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+            eprintln!("PANIC in callback: {e:?}");
+        }
+    }
+    *slot.borrow_mut() = f;
 }
 
 /// Wrapper for the overlay window with access to its widgets.
@@ -113,14 +145,26 @@ pub struct OverlayWindow {
     level_value: Rc<Cell<f32>>,
     spinner: Spinner,
     error_label: Label,
+    _stop_btn: Button,
     _cancel_btn: Button,
-    on_cancel: Rc<RefCell<Option<Box<CancelCallback>>>>,
+    on_cancel: Rc<RefCell<Option<Box<Callback>>>>,
+    on_confirm: Rc<RefCell<Option<Box<Callback>>>>,
 }
 
 impl OverlayWindow {
     /// Set the callback invoked when the user cancels (button or Escape).
     pub fn set_on_cancel(&self, f: impl Fn() + 'static) {
         *self.on_cancel.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Set the callback invoked when the user confirms (Enter key).
+    pub fn set_on_confirm(&self, f: impl Fn() + 'static) {
+        *self.on_confirm.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Get a reference to the underlying GTK window.
+    pub fn window(&self) -> &Window {
+        &self.window
     }
 
     /// Update the VU meter level.
@@ -163,26 +207,11 @@ impl OverlayWindow {
         self.error_label.set_visible(false);
     }
 
-    /// Show an error.
-    pub fn show_error(&self, message: &str) {
-        self.status_label.set_text("Error");
-        self.spinner.set_spinning(false);
-        self.spinner.set_visible(false);
-        self.level_area.set_visible(false);
-        self.error_label.set_text(message);
-        self.error_label.set_visible(true);
-    }
-
     /// Update the timer display.
     pub fn update_timer(&self, elapsed: std::time::Duration) {
         let secs = elapsed.as_secs();
         self.timer_label
             .set_text(&format!("{:02}:{:02}", secs / 60, secs % 60));
-    }
-
-    /// Hide the overlay.
-    pub fn hide(&self) {
-        self.window.set_visible(false);
     }
 }
 

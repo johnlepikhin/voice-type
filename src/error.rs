@@ -18,19 +18,6 @@ pub enum SecretError {
     CacheError(String),
 }
 
-/// Errors during hotkey listener operation.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum HotkeyError {
-    /// Invalid hotkey binding string.
-    #[error("Invalid hotkey binding: {0}")]
-    InvalidBinding(String),
-
-    /// Failed to start the hotkey listener.
-    #[error("Failed to start hotkey listener: {0}")]
-    ListenerFailed(String),
-}
-
 /// Errors during audio recording.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -76,27 +63,6 @@ pub enum TranscriptionError {
     /// Audio contained no speech (silence only).
     #[error("No speech detected in the recording. Please speak louder or check your microphone")]
     EmptyAudio,
-}
-
-/// Errors during text insertion into the target window.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum TextInsertionError {
-    /// Clipboard tool not available.
-    #[error("Clipboard tool not available. Install xclip (X11) or wl-copy (Wayland)")]
-    ClipboardUnavailable,
-
-    /// Paste simulation failed.
-    #[error("Failed to simulate paste. Install xdotool (X11) or wtype (Wayland)")]
-    PasteSimulationFailed,
-
-    /// Target window no longer exists.
-    #[error("The target window is no longer available. Text has been copied to clipboard")]
-    TargetWindowGone,
-
-    /// Unsupported display session type.
-    #[error("Unsupported session type. Set $XDG_SESSION_TYPE to 'x11' or 'wayland'")]
-    UnsupportedSessionType,
 }
 
 /// Errors during configuration loading and validation.
