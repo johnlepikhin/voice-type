@@ -1,6 +1,6 @@
 pub mod overlay;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +27,7 @@ pub fn load_css() {
 struct RecordState {
     capture: Option<AudioCapture>,
     timer_source: Option<glib::SourceId>,
+    exit_code: Rc<Cell<i32>>,
     confirmed: bool,
 }
 
@@ -35,7 +36,7 @@ struct RecordState {
 /// The overlay starts recording immediately. Press Enter to stop and process,
 /// Escape to cancel. Final text is printed to stdout.
 #[allow(clippy::too_many_lines)]
-pub fn run_record(app: &gtk4::Application, config: &AppConfig) {
+pub fn run_record(app: &gtk4::Application, config: &AppConfig, exit_code: &Rc<Cell<i32>>) {
     app.connect_shutdown(|app| {
         tracing::debug!(
             window_count = app.windows().len(),
@@ -50,12 +51,13 @@ pub fn run_record(app: &gtk4::Application, config: &AppConfig) {
     };
     let silence_threshold = config.audio.silence_threshold;
 
-    let (provider, transcribe_options) = config.provider.build_provider();
+    let (provider, transcribe_options) = voice_type::provider::from_config(&config.provider);
     let pipeline = Arc::new(ProcessingPipeline::from_configs(&config.post_processing));
 
     let state = Rc::new(RefCell::new(RecordState {
         capture: None,
         timer_source: None,
+        exit_code: Rc::clone(exit_code),
         confirmed: false,
     }));
 
@@ -81,7 +83,9 @@ pub fn run_record(app: &gtk4::Application, config: &AppConfig) {
         }
         Err(e) => {
             eprintln!("Failed to start recording: {e}");
-            std::process::exit(1);
+            state.borrow().exit_code.set(1);
+            app.quit();
+            return;
         }
     }
 
@@ -99,7 +103,9 @@ pub fn run_record(app: &gtk4::Application, config: &AppConfig) {
             if cap.has_stream_error() {
                 drop(borrow);
                 eprintln!("Microphone disconnected during recording");
-                std::process::exit(1);
+                state_for_timer.borrow().exit_code.set(1);
+                app_for_timer.quit();
+                return glib::ControlFlow::Break;
             }
             if cap.is_max_duration_reached() {
                 drop(borrow);
@@ -146,11 +152,12 @@ pub fn run_record(app: &gtk4::Application, config: &AppConfig) {
 
     // Escape → cancel
     {
+        let state_ref = Rc::clone(&state);
         let app_ref = app.clone();
         overlay.set_on_cancel(move || {
             tracing::debug!("Cancel (Escape) pressed");
+            state_ref.borrow().exit_code.set(1);
             app_ref.quit();
-            std::process::exit(1);
         });
     }
 
@@ -206,7 +213,9 @@ fn stop_and_process(
     // Silence check
     if captured.is_silence(silence_threshold) {
         eprintln!("No speech detected. Speak louder or check your microphone.");
-        std::process::exit(1);
+        state.borrow().exit_code.set(1);
+        app.quit();
+        return;
     }
 
     // Encode WAV
@@ -214,7 +223,9 @@ fn stop_and_process(
         Ok(data) => data,
         Err(e) => {
             eprintln!("WAV encoding failed: {e}");
-            std::process::exit(1);
+            state.borrow().exit_code.set(1);
+            app.quit();
+            return;
         }
     };
 
@@ -262,6 +273,7 @@ fn stop_and_process(
     // Poll for progress
     let overlay_ref = Rc::clone(overlay);
     let app_ref = app.clone();
+    let state_ref = Rc::clone(state);
     glib::timeout_add_local(Duration::from_millis(50), move || match rx.try_recv() {
         Ok(PipelineProgress::StepStarted {
             index,
@@ -284,19 +296,21 @@ fn stop_and_process(
         }) => {
             if processor_name == "transcription" {
                 eprintln!("Transcription failed: {error}");
-                std::process::exit(1);
+                state_ref.borrow().exit_code.set(1);
             } else {
                 // Post-processing failed — print original text
                 eprintln!("Post-processing '{processor_name}' failed: {error}");
                 println!("{original_text}");
-                app_ref.quit();
             }
+            app_ref.quit();
             glib::ControlFlow::Break
         }
         Err(std::sync::mpsc::TryRecvError::Empty) | Ok(_) => glib::ControlFlow::Continue,
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             eprintln!("Processing thread terminated unexpectedly");
-            std::process::exit(1);
+            state_ref.borrow().exit_code.set(1);
+            app_ref.quit();
+            glib::ControlFlow::Break
         }
     });
 }

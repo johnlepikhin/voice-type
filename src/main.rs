@@ -22,25 +22,25 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
+    let config_path = cli.config_path();
     match cli.command {
         cli::Commands::Record {
-            ref device,
-            ref language,
-            ref prompt,
-        } => cmd_record(&cli, device.clone(), language.clone(), prompt.clone()),
-        cli::Commands::Config { ref command } => cmd_config(&cli, command),
+            device,
+            language,
+            prompt,
+        } => cmd_record(&config_path, device, language, prompt),
+        cli::Commands::Config { command } => cmd_config(&config_path, &command),
     }
 }
 
 /// Execute the `record` command: show overlay, record, transcribe, print to stdout.
 fn cmd_record(
-    cli: &cli::Cli,
+    config_path: &std::path::Path,
     device: Option<String>,
     language: Option<String>,
     prompt: Option<String>,
 ) -> Result<()> {
-    let config_path = cli.config_path();
-    let mut config = voice_type::config::AppConfig::load(&config_path)
+    let mut config = voice_type::config::AppConfig::load(config_path)
         .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
 
     // Apply CLI overrides
@@ -80,7 +80,10 @@ fn cmd_record(
         "GApplication created"
     );
 
+    let exit_code = std::rc::Rc::new(std::cell::Cell::new(0i32));
+
     let config_for_activate = config;
+    let exit_code_for_activate = std::rc::Rc::clone(&exit_code);
     application.connect_activate(move |app| {
         tracing::debug!(
             is_registered = app.is_registered(),
@@ -88,7 +91,7 @@ fn cmd_record(
             "GTK activate signal fired"
         );
         app::load_css();
-        app::run_record(app, &config_for_activate);
+        app::run_record(app, &config_for_activate, &exit_code_for_activate);
         tracing::debug!(
             window_count = app.windows().len(),
             "run_record returned, activate handler done"
@@ -105,32 +108,38 @@ fn cmd_record(
 
     tracing::debug!("Calling hold() + run_with_args");
     let _hold = application.hold();
-    let exit_code = application.run_with_args(&["voice-type"]);
-    tracing::debug!(?exit_code, "GTK main loop exited");
+    let gtk_exit = application.run_with_args(&["voice-type"]);
+    tracing::debug!(
+        ?gtk_exit,
+        app_exit = exit_code.get(),
+        "GTK main loop exited"
+    );
+
+    let code = exit_code.get();
+    if code != 0 {
+        std::process::exit(code);
+    }
     Ok(())
 }
 
 /// Execute config subcommands.
-fn cmd_config(cli: &cli::Cli, command: &cli::ConfigCommands) -> Result<()> {
+fn cmd_config(config_path: &std::path::Path, command: &cli::ConfigCommands) -> Result<()> {
     match command {
         cli::ConfigCommands::Validate => {
-            let config_path = cli.config_path();
-            let config = voice_type::config::AppConfig::load(&config_path)
+            let config = voice_type::config::AppConfig::load(config_path)
                 .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
             config.validate().context("Validation failed")?;
             println!("Configuration is valid.");
             Ok(())
         }
         cli::ConfigCommands::Show => {
-            let config_path = cli.config_path();
-            let config = voice_type::config::AppConfig::load(&config_path)
+            let config = voice_type::config::AppConfig::load(config_path)
                 .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
             let yaml = serde_yaml::to_string(&config).context("Failed to serialize config")?;
             print!("{yaml}");
             Ok(())
         }
         cli::ConfigCommands::Init { force } => {
-            let config_path = cli.config_path();
             if config_path.exists() && !*force {
                 anyhow::bail!(
                     "Config file already exists at {}. Use --force to overwrite.",
@@ -141,7 +150,7 @@ fn cmd_config(cli: &cli::Cli, command: &cli::ConfigCommands) -> Result<()> {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("Failed to create directory {}", parent.display()))?;
             }
-            std::fs::write(&config_path, voice_type::config::AppConfig::default_yaml())
+            std::fs::write(config_path, voice_type::config::AppConfig::default_yaml())
                 .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
             println!("Config written to {}", config_path.display());
             Ok(())
