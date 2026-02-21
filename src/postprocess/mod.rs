@@ -44,31 +44,6 @@ impl PostProcessor {
     }
 }
 
-/// Result of running the processing pipeline.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum PipelineResult {
-    /// All processors succeeded; contains the final text.
-    Processed {
-        /// The processed text.
-        text: String,
-    },
-    /// No processors configured; contains the original text.
-    Skipped {
-        /// The original text, unchanged.
-        text: String,
-    },
-    /// A processor failed; contains the original text and error info.
-    Failed {
-        /// The original text before any processing.
-        original_text: String,
-        /// Name of the processor that failed.
-        processor_name: String,
-        /// The error that occurred.
-        error: PostProcessingError,
-    },
-}
-
 /// Progress messages sent from the pipeline to the UI during execution.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -113,7 +88,7 @@ pub struct ProcessingPipeline {
 /// and uses the project-wide idle connection age.
 fn create_shared_agent() -> Agent {
     let config = Agent::config_builder()
-        .max_idle_age(crate::HTTP_IDLE_TIMEOUT)
+        .max_idle_age(crate::http::HTTP_IDLE_TIMEOUT)
         .http_status_as_error(false)
         .build();
     Agent::new_with_config(config)

@@ -1,14 +1,6 @@
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
-use std::time::Duration;
-
-/// Maximum idle age for pooled HTTP connections.
-///
-/// Prevents reuse of stale TCP connections that may have been closed
-/// by upstream proxies (e.g., Cloudflare) before ureq's default idle timeout.
-pub const HTTP_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Log current process memory usage (`VmRSS`) from `/proc/self/status`.
 ///
 /// Reads the resident set size and logs it at debug level.
@@ -28,6 +20,7 @@ pub fn log_memory_usage(label: &str) {
 pub mod audio;
 pub mod config;
 pub mod error;
+pub mod http;
 pub mod postprocess;
 pub mod provider;
 pub mod types;

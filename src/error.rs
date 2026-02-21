@@ -65,6 +65,15 @@ pub enum TranscriptionError {
     EmptyAudio,
 }
 
+impl From<crate::http::TransportError> for TranscriptionError {
+    fn from(e: crate::http::TransportError) -> Self {
+        match e {
+            crate::http::TransportError::Timeout => Self::Timeout,
+            crate::http::TransportError::Network(msg) => Self::NetworkError(msg),
+        }
+    }
+}
+
 /// Errors during configuration loading and validation.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -136,6 +145,15 @@ pub enum PostProcessingError {
     /// Provider returned an empty response.
     #[error("Post-processing returned an empty response")]
     EmptyResponse,
+}
+
+impl From<crate::http::TransportError> for PostProcessingError {
+    fn from(e: crate::http::TransportError) -> Self {
+        match e {
+            crate::http::TransportError::Timeout => Self::Timeout,
+            crate::http::TransportError::Network(msg) => Self::NetworkError(msg),
+        }
+    }
 }
 
 impl PostProcessingError {

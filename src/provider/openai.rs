@@ -34,25 +34,13 @@ struct WhisperResponse {
     text: String,
 }
 
-/// Error response from the `OpenAI` API.
-#[derive(Deserialize)]
-struct OpenAiErrorResponse {
-    error: OpenAiErrorDetail,
-}
-
-/// Inner error detail from the `OpenAI` API.
-#[derive(Deserialize)]
-struct OpenAiErrorDetail {
-    message: String,
-}
-
 impl OpenAiWhisperProvider {
     /// Create a new provider from configuration values.
     #[must_use]
     pub fn new(api_key: Secret, model: String, timeout: Duration) -> Self {
         let config = Agent::config_builder()
             .timeout_global(Some(timeout))
-            .max_idle_age(crate::HTTP_IDLE_TIMEOUT)
+            .max_idle_age(crate::http::HTTP_IDLE_TIMEOUT)
             .http_status_as_error(false)
             .build();
         let agent = Agent::new_with_config(config);
@@ -157,7 +145,7 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
 
         let mut response = match result {
             Ok(resp) => resp,
-            Err(e) => return Err(map_ureq_error(e)),
+            Err(e) => return Err(crate::http::TransportError::from(e).into()),
         };
 
         let status = response.status().as_u16();
@@ -172,9 +160,7 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
         }
 
         if !(200..300).contains(&status) {
-            let message = serde_json::from_str::<OpenAiErrorResponse>(&body_str)
-                .map(|r| r.error.message)
-                .unwrap_or(body_str);
+            let message = crate::http::extract_api_error(&body_str);
             return Err(TranscriptionError::ProviderError { status, message });
         }
 
@@ -192,14 +178,6 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
             text: TranscribedText::new(whisper_response.text),
             request_duration,
         })
-    }
-}
-
-/// Map ureq transport-level errors to our transcription error types.
-fn map_ureq_error(error: ureq::Error) -> TranscriptionError {
-    match error {
-        ureq::Error::Timeout(_) => TranscriptionError::Timeout,
-        other => TranscriptionError::NetworkError(other.to_string()),
     }
 }
 

@@ -18,7 +18,7 @@ const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 ///
 /// Uses a shared [`Agent`] for connection pooling across multiple clients,
 /// with per-request timeout override.
-pub struct ChatCompletionsClient {
+pub(super) struct ChatCompletionsClient {
     agent: Agent,
     api_key: crate::config::Secret,
     model: String,
@@ -64,18 +64,6 @@ struct ChatChoice {
 #[derive(Deserialize)]
 struct ChatResponseMessage {
     content: Option<String>,
-}
-
-/// Error response from the `OpenAI` API.
-#[derive(Deserialize)]
-struct OpenAiErrorResponse {
-    error: OpenAiErrorDetail,
-}
-
-/// Inner error detail.
-#[derive(Deserialize)]
-struct OpenAiErrorDetail {
-    message: String,
 }
 
 impl ChatCompletionsClient {
@@ -175,7 +163,7 @@ impl ChatCompletionsClient {
 
         let mut response = match result {
             Ok(resp) => resp,
-            Err(e) => return Err(map_ureq_error(e)),
+            Err(e) => return Err(crate::http::TransportError::from(e).into()),
         };
 
         let status = response.status().as_u16();
@@ -190,9 +178,7 @@ impl ChatCompletionsClient {
         }
 
         if !(200..300).contains(&status) {
-            let message = serde_json::from_str::<OpenAiErrorResponse>(&body_str)
-                .map(|r| r.error.message)
-                .unwrap_or(body_str);
+            let message = crate::http::extract_api_error(&body_str);
             return Err(PostProcessingError::ProviderError { status, message });
         }
 
@@ -223,14 +209,6 @@ fn retry_delay(attempt: u32) -> Duration {
     let shift = 1u64.checked_shl(attempt).unwrap_or(u64::MAX);
     let delay_ms = base_ms.saturating_mul(shift);
     Duration::from_millis(delay_ms.min(5000))
-}
-
-/// Map ureq transport-level errors to post-processing error types.
-fn map_ureq_error(error: ureq::Error) -> PostProcessingError {
-    match error {
-        ureq::Error::Timeout(_) => PostProcessingError::Timeout,
-        other => PostProcessingError::NetworkError(other.to_string()),
-    }
 }
 
 #[cfg(test)]
