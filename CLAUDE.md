@@ -3,6 +3,7 @@
 Auto-generated from all feature plans. Last updated: 2026-02-20
 
 ## Active Technologies
+- N/A (documentation only — no code changes) (004-user-documentation)
 
 - Rust 1.88+ (stable, edition 2021) (001-core-voice-input)
 - GTK4 via gtk4-rs bindings
@@ -58,9 +59,9 @@ guix shell -m manifest.scm -- cargo doc --no-deps      # Docs build clean
 - `ProviderConfig::build_provider()` factory creates provider + options (no duplication)
 
 ## Recent Changes
+- 004-user-documentation: Added N/A (documentation only — no code changes)
 - 003-memory-optimization: Daemon memory optimization (buffer lifecycle, shared HTTP agent, lazy pipeline)
 - 002-text-post-processing: Text post-processing pipeline with configurable LLM processors
-- 001-core-voice-input: Added Rust 1.88+ (stable, edition 2021)
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
