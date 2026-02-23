@@ -116,6 +116,12 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
             .unsecure()
             .map_err(|_| TranscriptionError::AuthenticationError)?;
 
+        let expanded_prompt = options
+            .prompt
+            .as_deref()
+            .map(crate::template::expand)
+            .transpose()?;
+
         let body = Self::build_multipart_body(
             &audio.wav_bytes,
             &self.model,
@@ -123,7 +129,7 @@ impl TranscriptionProvider for OpenAiWhisperProvider {
                 .language
                 .as_ref()
                 .map(crate::types::LanguageCode::as_str),
-            options.prompt.as_deref(),
+            expanded_prompt.as_deref(),
         );
 
         let content_type = format!("multipart/form-data; boundary={BOUNDARY}");

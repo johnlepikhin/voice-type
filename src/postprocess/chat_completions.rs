@@ -94,7 +94,10 @@ impl ChatCompletionsClient {
     /// # Errors
     /// Returns `PostProcessingError` on network, auth, provider, or empty response failures.
     pub fn send(&self, user_text: &str) -> Result<String, PostProcessingError> {
-        let mut last_error = match self.send_once(user_text) {
+        // Expand templates once so shell commands don't re-execute on retries.
+        let system_prompt = crate::template::expand(&self.system_prompt)?;
+
+        let mut last_error = match self.send_once(user_text, &system_prompt) {
             Ok(result) => return Ok(result),
             Err(e) => e,
         };
@@ -113,7 +116,7 @@ impl ChatCompletionsClient {
             );
             std::thread::sleep(delay);
 
-            match self.send_once(user_text) {
+            match self.send_once(user_text, &system_prompt) {
                 Ok(result) => return Ok(result),
                 Err(e) => last_error = e,
             }
@@ -123,7 +126,11 @@ impl ChatCompletionsClient {
     }
 
     /// Perform a single HTTP request to the chat completions API.
-    fn send_once(&self, user_text: &str) -> Result<String, PostProcessingError> {
+    fn send_once(
+        &self,
+        user_text: &str,
+        system_prompt: &str,
+    ) -> Result<String, PostProcessingError> {
         let api_key = self
             .api_key
             .unsecure()
@@ -134,7 +141,7 @@ impl ChatCompletionsClient {
             messages: vec![
                 ChatMessage {
                     role: "system",
-                    content: &self.system_prompt,
+                    content: system_prompt,
                 },
                 ChatMessage {
                     role: "user",

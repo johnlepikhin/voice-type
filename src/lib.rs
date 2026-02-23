@@ -23,4 +23,5 @@ pub mod error;
 pub mod http;
 pub mod postprocess;
 pub mod provider;
+pub mod template;
 pub mod types;

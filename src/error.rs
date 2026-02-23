@@ -63,6 +63,10 @@ pub enum TranscriptionError {
     /// Audio contained no speech (silence only).
     #[error("No speech detected in the recording. Please speak louder or check your microphone")]
     EmptyAudio,
+
+    /// Template expansion failed in the provider prompt.
+    #[error("Template expansion failed: {0}")]
+    TemplateExpansionError(#[from] crate::template::TemplateError),
 }
 
 impl From<crate::http::TransportError> for TranscriptionError {
@@ -145,6 +149,10 @@ pub enum PostProcessingError {
     /// Provider returned an empty response.
     #[error("Post-processing returned an empty response")]
     EmptyResponse,
+
+    /// Template expansion failed in the system prompt.
+    #[error("Post-processing template expansion failed: {0}")]
+    TemplateExpansionError(#[from] crate::template::TemplateError),
 }
 
 impl From<crate::http::TransportError> for PostProcessingError {
@@ -163,13 +171,16 @@ impl PostProcessingError {
     /// [`ProviderError`](Self::ProviderError) with status 429 or >= 500.
     ///
     /// Not retryable: [`AuthenticationError`](Self::AuthenticationError),
-    /// [`EmptyResponse`](Self::EmptyResponse), other 4xx status codes.
+    /// [`EmptyResponse`](Self::EmptyResponse),
+    /// [`TemplateExpansionError`](Self::TemplateExpansionError), other 4xx status codes.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::NetworkError(_) | Self::Timeout => true,
             Self::ProviderError { status, .. } => *status == 429 || *status >= 500,
-            Self::AuthenticationError | Self::EmptyResponse => false,
+            Self::AuthenticationError | Self::EmptyResponse | Self::TemplateExpansionError(_) => {
+                false
+            }
         }
     }
 }
@@ -298,6 +309,17 @@ mod tests {
     #[test]
     fn not_retryable_empty_response() {
         assert!(!PostProcessingError::EmptyResponse.is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_template_expansion() {
+        let err = PostProcessingError::TemplateExpansionError(
+            crate::template::TemplateError::CommandFailed {
+                command: "test".to_owned(),
+                reason: "failed".to_owned(),
+            },
+        );
+        assert!(!err.is_retryable());
     }
 
     #[test]

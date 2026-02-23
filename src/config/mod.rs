@@ -243,7 +243,8 @@ audio:
 
 # post_processing:             # Optional: LLM post-processing pipeline
 #   - name: Grammar
-#     system_prompt: "Fix grammar and punctuation. Return only the corrected text."
+#     system_prompt: "Fix grammar. Current time: {{datetime}}"
+#     # Templates: {{datetime}}, {{date}}, {{time}}, {{$(shell command)}}
 #     api_key: !FromEnv OPENAI_API_KEY
 #     model: gpt-4o-mini
 #     # endpoint: https://api.openai.com

@@ -47,6 +47,24 @@ hotkey:
   # Supported modifiers: Shift, Ctrl, Alt, Super (aliases: Meta, Win)
   binding: Shift+F8                 # default: Shift+F8
 
+# ─── Template Variables ─────────────────────────────────────────────────────
+# Both `system_prompt` and provider `prompt` support template substitution.
+# Templates are expanded at request time, so values like datetime are always fresh.
+#
+# Built-in variables:
+#   {{datetime}}  — current local date and time (ISO 8601: 2026-02-23T14:30:05+03:00)
+#   {{date}}      — current local date (2026-02-23)
+#   {{time}}      — current local time (14:30:05)
+#
+# Shell command output:
+#   {{$(command)}} — stdout of `sh -c "command"` (5s timeout)
+#   Examples: {{$(hostname)}}, {{$(whoami)}}, {{$(cat /etc/timezone)}}
+#
+# Escaping:
+#   \{{...}} — literal double braces (no expansion)
+#
+# Unknown variables are left as-is.
+
 # ─── Post-Processing ────────────────────────────────────────────────────────
 # Optional pipeline of LLM-based text processors. Each processor receives the
 # output of the previous one (or the raw transcription for the first step).
@@ -64,5 +82,13 @@ hotkey:
 #
 #   - name: Translate
 #     system_prompt: "Translate the following text to English. Return only the translation."
+#     api_key: !FromEnv OPENAI_API_KEY
+#     model: gpt-4o-mini
+#
+#   - name: Assistant
+#     system_prompt: |
+#       You are a helpful assistant. Current time: {{datetime}}.
+#       User timezone: {{$(cat /etc/timezone)}}.
+#       Fix grammar and punctuation. Return only the corrected text.
 #     api_key: !FromEnv OPENAI_API_KEY
 #     model: gpt-4o-mini
